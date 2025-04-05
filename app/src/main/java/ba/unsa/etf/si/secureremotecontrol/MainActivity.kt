@@ -36,7 +36,7 @@ fun MainApp() {
             HomeScreen(navController)
         }
         composable("verify") {
-            VerificationScreen()
+            VerificationScreen(navController)
         }
     }
 }

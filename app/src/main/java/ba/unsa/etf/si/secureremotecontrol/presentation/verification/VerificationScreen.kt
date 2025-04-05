@@ -1,76 +1,104 @@
 package ba.unsa.etf.si.secureremotecontrol.presentation.verification
 
-import android.os.Bundle
 import android.provider.Settings
-import androidx.activity.ComponentActivity
-import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.ViewModel
-import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
-import ba.unsa.etf.si.secureremotecontrol.data.network.VerificationRequest
-import ba.unsa.etf.si.secureremotecontrol.data.network.VerificationResponse
-import ba.unsa.etf.si.secureremotecontrol.data.network.RetrofitClient
-import kotlinx.coroutines.launch
-import java.lang.Exception // Import Exception
+import androidx.navigation.NavController
+import kotlinx.coroutines.delay
+import kotlin.system.exitProcess
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun VerificationScreen(viewModel: VerificationViewModel = viewModel()) {
+fun VerificationScreen(
+    navController: NavController,
+    viewModel: VerificationViewModel = viewModel()
+) {
     val context = LocalContext.current
-    // Dohvatanje jedinstvenog ID-a uređaja
-    // NAPOMENA: ANDROID_ID može biti null ili se promijeniti kod factory reseta.
-    // Za pouzdaniju identifikaciju razmotrite druge metode ako je potrebno.
     val deviceId = Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID) ?: "nepoznat_id"
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
-    ) {
-        Text("Unesite kod za odjavu:", style = MaterialTheme.typography.headlineSmall)
-        Spacer(modifier = Modifier.height(16.dp))
+    val serverMessage = viewModel.serverMessage
+    val isSuccessful = viewModel.isVerificationSuccessful
 
-        OutlinedTextField(
-            value = viewModel.code,
-            onValueChange = { viewModel.updateCode(it) },
-            label = { Text("Kod") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth()
-        )
-        Spacer(modifier = Modifier.height(16.dp))
+    // Reaguj kada se poruka promijeni
+    LaunchedEffect(serverMessage) {
+        if (serverMessage != null && isSuccessful == true) {
+            delay(3000)
+            navController.navigate("home") {
+                popUpTo(0)
+            }
+        }
+    }
 
-        // Prikaz poruke od servera ili lokalne greške
-        viewModel.serverMessage?.let { message ->
-            Text(
-                text = message,
-                color = if (message.contains("Uspješno", ignoreCase = true)) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
-                modifier = Modifier.padding(bottom = 8.dp)
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("") },
+                navigationIcon = {
+                    IconButton(onClick = { navController.navigateUp() }) {
+                        Icon(
+                            imageVector = Icons.Filled.ArrowBack,
+                            contentDescription = "Nazad"
+                        )
+                    }
+                }
             )
         }
-
-        // Prikaz loading indikatora dok čekamo odgovor
-        if (viewModel.isLoading) {
-            CircularProgressIndicator(modifier = Modifier.padding(bottom = 8.dp))
-        }
-
-        Button(
-            onClick = { viewModel.sendVerification(deviceId) },
-            enabled = !viewModel.isLoading, // Onemogući dugme tokom učitavanja
-            modifier = Modifier.fillMaxWidth()
+    ) { paddingValues ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(paddingValues)
+                .padding(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
         ) {
-            Text("Potvrdi Odjavu")
+            Text("Unesite kod za odjavu:", style = MaterialTheme.typography.headlineSmall)
+            Spacer(modifier = Modifier.height(16.dp))
+
+            OutlinedTextField(
+                value = viewModel.code,
+                onValueChange = { viewModel.updateCode(it) },
+                label = { Text("Kod") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Prikaz poruke (ako postoji)
+            serverMessage?.let { message ->
+                Text(
+                    text = message,
+                    color = if (isSuccessful == true)
+                        MaterialTheme.colorScheme.primary
+                    else
+                        MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
+            }
+
+            if (viewModel.isLoading) {
+                CircularProgressIndicator(modifier = Modifier.padding(bottom = 8.dp))
+            }
+
+            Button(
+                onClick = { viewModel.sendVerification(deviceId) },
+                enabled = !viewModel.isLoading && viewModel.code.isNotBlank(),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Potvrdi Odjavu")
+            }
+
+            Spacer(modifier = Modifier.height(24.dp))
+            Text("ID Uređaja: $deviceId", style = MaterialTheme.typography.bodySmall)
         }
-
-        Spacer(modifier = Modifier.height(24.dp))
-        Text("ID Uređaja: $deviceId", style = MaterialTheme.typography.bodySmall)
-
     }
 }
