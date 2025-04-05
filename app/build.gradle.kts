@@ -72,7 +72,7 @@ dependencies {
     // Arrow
     implementation("io.arrow-kt:arrow-core:1.2.0")
     implementation("io.arrow-kt:arrow-fx-coroutines:1.2.0")
-    
+
     // Retrofit
     implementation("com.squareup.retrofit2:retrofit:2.9.0")
     implementation("com.squareup.retrofit2:converter-gson:2.9.0")
@@ -93,7 +93,7 @@ dependencies {
 
     // Coil
     implementation("io.coil-kt:coil-compose:2.5.0")
-
+    implementation("androidx.navigation:navigation-compose:2.7.6")
     // Testing
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.1.5")

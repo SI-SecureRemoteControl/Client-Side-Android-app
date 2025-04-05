@@ -3,12 +3,13 @@ package ba.unsa.etf.si.secureremotecontrol
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
-import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
+import androidx.compose.runtime.Composable
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
+import androidx.navigation.compose.rememberNavController
+import ba.unsa.etf.si.secureremotecontrol.presentation.home.HomeScreen
+import ba.unsa.etf.si.secureremotecontrol.presentation.verification.VerificationScreen
 import ba.unsa.etf.si.secureremotecontrol.ui.theme.SecureRemoteControlTheme
 import dagger.hilt.android.AndroidEntryPoint
 
@@ -18,11 +19,8 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         setContent {
             SecureRemoteControlTheme {
-                Surface(
-                    modifier = Modifier.fillMaxSize(),
-                    color = MaterialTheme.colorScheme.background
-                ) {
-                    MainScreen()
+                Surface(color = MaterialTheme.colorScheme.background) {
+                    MainApp()
                 }
             }
         }
@@ -30,17 +28,15 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun MainScreen() {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
-    ) {
-        Text(
-            text = "Welcome to Secure Remote Control",
-            style = MaterialTheme.typography.headlineMedium
-        )
+fun MainApp() {
+    val navController = rememberNavController()
+
+    NavHost(navController = navController, startDestination = "home") {
+        composable("home") {
+            HomeScreen(navController)
+        }
+        composable("verify") {
+            VerificationScreen()
+        }
     }
 }
