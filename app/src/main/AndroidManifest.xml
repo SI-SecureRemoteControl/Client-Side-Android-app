@@ -1,13 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:tools="http://schemas.android.com/tools">
-    <uses-permission android:name="android.permission.INTERNET"/>
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
-    <uses-permission android:name="android.permission.RECORD_AUDIO" />
-    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
-    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-    <uses-permission android:name="android.permission.CAMERA" />
+    xmlns:tools="http://schemas.android.com/tools"
+    package="ba.unsa.etf.si.secureremotecontrol"> <uses-permission android:name="android.permission.INTERNET"/>
+
 
     <application
         android:name=".RemoteControlApplication"
@@ -19,7 +14,8 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.SecureRemoteControl"
-        tools:targetApi="31">
+        android:foregroundServiceType="connectedDevice|dataSync"
+        tools:targetApi="31" android:networkSecurityConfig="@xml/network_security_config">
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -35,8 +31,11 @@
         <service
             android:name=".service.RemoteControlService"
             android:enabled="true"
-            android:exported="false" />
+            android:exported="false"
+            />
 
     </application>
+
+
 
 </manifest>
