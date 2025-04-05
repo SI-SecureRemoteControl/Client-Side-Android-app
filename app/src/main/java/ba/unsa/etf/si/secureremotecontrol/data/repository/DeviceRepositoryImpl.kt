@@ -1,17 +1,20 @@
 package ba.unsa.etf.si.secureremotecontrol.data.repository
 
+import ba.unsa.etf.si.secureremotecontrol.data.api.ApiService
 import ba.unsa.etf.si.secureremotecontrol.data.models.Device
 import ba.unsa.etf.si.secureremotecontrol.data.models.DeviceStatus
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
+import retrofit2.Response
 import javax.inject.Inject
 import javax.inject.Singleton
 
 @Singleton
-class DeviceRepositoryImpl @Inject constructor() : DeviceRepository {
-    override suspend fun registerDevice(device: Device): Result<Device> {
-        // TODO: Implement actual registration logic
-        return Result.success(device)
+class DeviceRepositoryImpl @Inject constructor(
+    private val apiService: ApiService
+) : DeviceRepository {
+    override suspend fun registerDevice(device: Device): Response<Void> {
+        return apiService.registerDevice(device)
     }
 
     override suspend fun updateDeviceStatus(deviceId: String, status: DeviceStatus): Result<Device> {
