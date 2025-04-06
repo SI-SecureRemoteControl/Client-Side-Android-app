@@ -28,12 +28,14 @@ class DeviceRepositoryImpl @Inject constructor(
 
     override suspend fun updateDeviceStatus(deviceId: String, status: DeviceStatus): Result<Device> {
         // TODO: Implement actual status update logic
-        return Result.success(Device(deviceId, "Test Device", "Test key", status, "Test model", "Test OS", "Test network", "Test IP", "Test deregistration key"))
+        return Result.success(Device(deviceId, "Test Device", "Test key", status))
+            //"Test model", "Test OS", "Test network", "Test IP", "Test deregistration key"))
     }
 
     override suspend fun getDevice(deviceId: String): Result<Device> {
         // TODO: Implement actual device fetching logic
-        return Result.success(Device(deviceId, "Test Device", "Test key", DeviceStatus.OFFLINE, "Test model", "Test OS", "Test network", "Test IP", "Test deregistration key"))
+        return Result.success(Device(deviceId, "Test Device", "Test key", DeviceStatus.OFFLINE))
+        //, "Test model", "Test OS", "Test network", "Test IP", "Test deregistration key"))
     }
 
     override fun observeDeviceStatus(deviceId: String): Flow<DeviceStatus> = flow {

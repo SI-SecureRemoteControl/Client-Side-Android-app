@@ -16,8 +16,6 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
-import java.net.InetAddress
-import java.net.NetworkInterface
 import java.util.*
 import javax.inject.Inject
 import android.util.Log
@@ -57,14 +55,14 @@ class DeviceViewModel @Inject constructor(
                     "success" -> {
                         Log.d("DeviceViewModel", "Device registered successfully")
                         _deviceState.value = DeviceState.Registered(Device(
-                            deviceId = response["deviceId"] as String,
-                            name = response["name"] as String,
-                            registrationKey = response["registrationKey"] as String,
-                            model = response["model"] as String,
-                            osVersion = response["osVersion"] as String,
-                            networkType = response["networkType"] as String,
-                            ipAddress = response["ipAddress"] as String,
-                            deregistrationKey = response["deregistrationKey"] as String
+                            deviceId = "",
+                            name = "",
+                            registrationKey = "",
+//                            model = response["model"] as String,
+//                            osVersion = response["osVersion"] as String,
+//                            networkType = response["networkType"] as String,
+//                            ipAddress = response["ipAddress"] as String,
+//                            deregistrationKey = response["deregistrationKey"] as String
                         ))
                     }
                     "error" -> {
@@ -91,11 +89,11 @@ class DeviceViewModel @Inject constructor(
                     deviceId = deviceId,
                     name = name,
                     registrationKey = registrationKey,
-                    model = model,
-                    osVersion = osVersion,
-                    networkType = networkType,
-                    ipAddress = ipAddress,
-                    deregistrationKey = deregistrationKey
+                    // model = "model",
+                    // osVersion = "osVersion",
+                    // networkType = "networkType",
+                    // ipAddress = "ipAddress",
+                    // deregistrationKey = "deregistrationKey"
                 )
 
                 webSocketService.sendRegistration(device)
