@@ -17,6 +17,11 @@ class MyWebSocketClient {
     private var heartbeatJob: Job? = null
     private val PING_INTERVAL_MS = 60000L // 1 minute
 
+    private val MAX_RETRY_ATTEMPTS = 5
+    private val RETRY_DELAY_MS = 5000L // 5s
+
+    private var retryCount = 0
+
     // Define listener interface (optional but good practice)
     interface WebSocketListenerCallback {
         fun onWebSocketOpen()
@@ -36,6 +41,21 @@ class MyWebSocketClient {
             .build()
     }
 
+    private fun retryConnection(url: String, deviceId: String) {
+        if (retryCount < MAX_RETRY_ATTEMPTS) {
+            retryCount++
+            Log.d(TAG, "Retrying connection attempt #$retryCount")
+            // Wait for a specified time before retrying
+            clientScope.launch {
+                delay(RETRY_DELAY_MS)
+                connect(url, deviceId)
+            }
+        } else {
+            Log.e(TAG, "Max retries reached. Connection failed.")
+            listenerCallback?.onWebSocketFailure(Throwable("Max retries reached"), null)
+        }
+    }
+
     fun connect(url: String, deviceId: String) { // Pass deviceId for heartbeats
         if (webSocket != null) {
             Log.w(TAG, "Already connected or connecting.")
@@ -44,7 +64,7 @@ class MyWebSocketClient {
         Log.d(TAG, "Attempting to connect to: $url")
         val request = Request.Builder().url(url).build()
         // Pass deviceId to the listener or store it in the class if needed elsewhere
-        webSocket = client.newWebSocket(request, SocketListener(deviceId))
+        webSocket = client.newWebSocket(request, SocketListener(deviceId, url))
     }
 
     fun sendMessage(message: String): Boolean {
@@ -89,7 +109,10 @@ class MyWebSocketClient {
     }
 
 
-    private inner class SocketListener(private val deviceId: String) : WebSocketListener() {
+    private inner class SocketListener(
+        private val deviceId: String,
+        private val url: String
+    ) : WebSocketListener() {
         override fun onOpen(webSocket: WebSocket, response: Response) {
             Log.d(TAG, "WebSocket connection opened for device: $deviceId")
             listenerCallback?.onWebSocketOpen()
@@ -106,8 +129,45 @@ class MyWebSocketClient {
 
         override fun onMessage(webSocket: WebSocket, text: String) {
             Log.d(TAG, "Received text message: $text")
-            listenerCallback?.onWebSocketMessage(text)
             // Handle server messages if needed
+
+            try {
+                val data = JSONObject(text)
+
+                when (data.getString("type")) {
+
+                    "signal" -> {
+                        val from = data.getString("from")
+                        val payload = data.getJSONObject("payload")
+                        Log.d(TAG, "Received signal from $from with payload: $payload")
+
+                        listenerCallback?.onWebSocketMessage("Received signal from $from with payload: $payload")
+                    }
+
+                    "status" -> {
+                        val deviceId = data.getString("deviceId")
+                        val status = data.getString("status")
+                        Log.d(TAG, "Device $deviceId status: $status")
+
+                        listenerCallback?.onWebSocketMessage("Device $deviceId is $status")
+                    }
+
+                    "disconnect" -> {
+                        val deviceId = data.getString("deviceId")
+                        Log.d(TAG, "Device $deviceId has disconnected")
+
+                        listenerCallback?.onWebSocketMessage("Device $deviceId has disconnected")
+                    }
+
+                    else -> {
+                        Log.w(TAG, "Unknown message type: ${data.getString("type")}")
+                    }
+                }
+
+            } catch (e: Exception) {
+                Log.e(TAG, "Error parsing message: $e")
+            }
+
         }
 
         override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
@@ -130,6 +190,8 @@ class MyWebSocketClient {
             heartbeatJob = null
             this@MyWebSocketClient.webSocket = null
             listenerCallback?.onWebSocketFailure(t, response)
+
+            retryConnection(url, deviceId)
         }
     }
 }
