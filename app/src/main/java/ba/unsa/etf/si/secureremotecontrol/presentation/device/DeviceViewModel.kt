@@ -56,13 +56,9 @@ class DeviceViewModel @Inject constructor(
                         Log.d("DeviceViewModel", "Device registered successfully")
                         _deviceState.value = DeviceState.Registered(Device(
                             deviceId = "a",
-                            name = "a",
                             registrationKey = "a",
                             model = "a",
                             osVersion = "a",
-                            networkType = "a",
-                            ipAddress = "a",
-                            deregistrationKey = "a"
                         ))
                     }
                     "error" -> {
@@ -74,7 +70,7 @@ class DeviceViewModel @Inject constructor(
         }
     }
 
-    fun registerDevice(name: String, registrationKey: String, deregistrationKey: String) {
+    fun registerDevice(registrationKey: String) {
         viewModelScope.launch {
             _deviceState.value = DeviceState.Loading
 
@@ -82,18 +78,12 @@ class DeviceViewModel @Inject constructor(
                 val deviceId = Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID)
                 val model = Build.MODEL
                 val osVersion = Build.VERSION.RELEASE
-                val networkType = getNetworkType()
-                val ipAddress = getIpAddress()
 
                 val device = Device(
                     deviceId = deviceId,
-                    name = name,
                     registrationKey = registrationKey,
                     model = model,
-                    osVersion = osVersion,
-                    networkType = networkType,
-                    ipAddress = ipAddress,
-                    deregistrationKey = deregistrationKey
+                    osVersion = osVersion
                 )
 
                 webSocketService.sendRegistration(device)
@@ -101,30 +91,6 @@ class DeviceViewModel @Inject constructor(
                 _deviceState.value = DeviceState.Error("Error: ${e.localizedMessage}")
             }
         }
-    }
-
-    private fun getNetworkType(): String {
-        val connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-        val network = connectivityManager.activeNetwork ?: return ""
-        val networkCapabilities = connectivityManager.getNetworkCapabilities(network) ?: return ""
-        return when {
-            networkCapabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "wifi"
-            networkCapabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "mobileData"
-            else -> ""
-        }
-    }
-
-    private fun getIpAddress(): String {
-        val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
-        val ipAddress = wifiManager.connectionInfo.ipAddress
-        return String.format(
-            Locale.getDefault(),
-            "%d.%d.%d.%d",
-            (ipAddress and 0xff),
-            (ipAddress shr 8 and 0xff),
-            (ipAddress shr 16 and 0xff),
-            (ipAddress shr 24 and 0xff)
-        )
     }
 }
 sealed class DeviceState {
