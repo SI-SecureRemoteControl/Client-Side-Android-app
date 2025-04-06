@@ -9,7 +9,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import ba.unsa.etf.si.secureremotecontrol.presentation.home.HomeScreen
-import ba.unsa.etf.si.secureremotecontrol.presentation.verification.VerificationScreen
+import ba.unsa.etf.si.secureremotecontrol.presentation.verification.DeregistrationScreen
 import ba.unsa.etf.si.secureremotecontrol.ui.theme.SecureRemoteControlTheme
 import dagger.hilt.android.AndroidEntryPoint
 
@@ -36,7 +36,7 @@ fun MainApp() {
             HomeScreen(navController)
         }
         composable("verify") {
-            VerificationScreen(navController)
+            DeregistrationScreen(navController)
         }
     }
 }
