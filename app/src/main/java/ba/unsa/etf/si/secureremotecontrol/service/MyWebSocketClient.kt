@@ -5,7 +5,7 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import okhttp3.*
 import okio.ByteString
-import org.json.JSONObject // Use a JSON library
+import org.json.JSONObject // Koristimo org.json, može i druga biblioteka (Gson, Moshi)
 import java.util.concurrent.TimeUnit
 
 class MyWebSocketClient {
@@ -15,17 +15,19 @@ class MyWebSocketClient {
     private val TAG = "WebSocketClient"
     private val clientScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var heartbeatJob: Job? = null
-    private val PING_INTERVAL_MS = 60000L // 1 minute
+    // --- PROMIJENJEN INTERVAL ---
+    // Slanje češće od HEARTBEAT_TIMEOUT (60s) i malo češće od HEARTBEAT_CHECK_INTERVAL (30s) radi sigurnosti
+    private val HEARTBEAT_SEND_INTERVAL_MS = 25000L // 25 sekundi
 
     private val MAX_RETRY_ATTEMPTS = 5
     private val RETRY_DELAY_MS = 5000L // 5s
 
     private var retryCount = 0
 
-    // Define listener interface (optional but good practice)
+    // Listener interfejs ostaje isti
     interface WebSocketListenerCallback {
         fun onWebSocketOpen()
-        fun onWebSocketMessage(text: String) // Can be JSON
+        fun onWebSocketMessage(text: String) // Primljeni tekst (može biti JSON)
         fun onWebSocketClosing(code: Int, reason: String)
         fun onWebSocketFailure(t: Throwable, response: Response?)
     }
@@ -33,164 +35,196 @@ class MyWebSocketClient {
     var listenerCallback: WebSocketListenerCallback? = null
 
     init {
-        // Configure OkHttpClient - Removed automatic pingInterval
-        // You CAN keep OkHttp's pingInterval for low-level checks if you want redundancy,
-        // but the application heartbeat below is now the primary mechanism for triggering DB updates.
+        // OkHttpClient konfiguracija bez automatskog pingInterval-a
         client = OkHttpClient.Builder()
-            // .pingInterval(1, TimeUnit.MINUTES) // Commented out or removed
+            // .pingInterval(...) // Nije potrebno za naš aplikacijski heartbeat
+            .connectTimeout(10, TimeUnit.SECONDS) // Dobro je imati timeout-e
+            .readTimeout(10, TimeUnit.SECONDS)
+            .writeTimeout(10, TimeUnit.SECONDS)
             .build()
     }
 
     private fun retryConnection(url: String, deviceId: String) {
         if (retryCount < MAX_RETRY_ATTEMPTS) {
             retryCount++
-            Log.d(TAG, "Retrying connection attempt #$retryCount")
-            // Wait for a specified time before retrying
+            Log.d(TAG, "Pokušaj ponovnog povezivanja #$retryCount za $deviceId nakon ${RETRY_DELAY_MS}ms")
+            // Čekaj specificirano vrijeme prije ponovnog pokušaja
             clientScope.launch {
                 delay(RETRY_DELAY_MS)
-                connect(url, deviceId)
+                connect(url, deviceId) // Ponovo pozovi connect
             }
         } else {
-            Log.e(TAG, "Max retries reached. Connection failed.")
-            listenerCallback?.onWebSocketFailure(Throwable("Max retries reached"), null)
+            Log.e(TAG, "Dostignut maksimalan broj pokušaja ($MAX_RETRY_ATTEMPTS). Povezivanje neuspješno za $deviceId.")
+            listenerCallback?.onWebSocketFailure(Throwable("Max retries reached for $deviceId"), null)
+            retryCount = 0 // Resetuj brojač za buduće pokušaje ako bude potrebno
         }
     }
 
-    fun connect(url: String, deviceId: String) { // Pass deviceId for heartbeats
-        if (webSocket != null) {
-            Log.w(TAG, "Already connected or connecting.")
+    fun connect(url: String, deviceId: String) {
+        if (webSocket != null && retryCount == 0) { // Provjeri i retryCount da izbjegneš duple poruke ako već pokušava
+            Log.w(TAG, "Već povezan ili u procesu povezivanja/pokušaja za $deviceId.")
             return
         }
-        Log.d(TAG, "Attempting to connect to: $url")
+        Log.d(TAG, "Pokušaj povezivanja na: $url za uređaj: $deviceId")
         val request = Request.Builder().url(url).build()
-        // Pass deviceId to the listener or store it in the class if needed elsewhere
+        // Kreiraj novu WebSocket konekciju sa SocketListener-om
         webSocket = client.newWebSocket(request, SocketListener(deviceId, url))
     }
 
-    fun sendMessage(message: String): Boolean {
+    // Generička funkcija za slanje JSON poruka
+    private fun sendJsonMessage(jsonObject: JSONObject): Boolean {
+        val message = jsonObject.toString()
         return webSocket?.send(message) ?: run {
-            Log.e(TAG, "Cannot send message, WebSocket is not connected.")
+            Log.e(TAG, "Ne mogu poslati poruku, WebSocket nije povezan: $message")
             false
         }
     }
 
-    // Function to send the application-level heartbeat
-    private fun sendHeartbeatMessage(deviceId: String) {
-        val heartbeatMsg = JSONObject()
-        heartbeatMsg.put("type", "heartbeat")
-        heartbeatMsg.put("deviceId", deviceId)
-        heartbeatMsg.put("timestamp", System.currentTimeMillis())
+    // --- PROMIJENJENA FUNKCIJA ---
+    // Funkcija za slanje aplikacijskog heartbeat-a (sada kao "status")
+    private fun sendStatusHeartbeatMessage(deviceId: String) {
+        val statusMsg = JSONObject()
+        statusMsg.put("type", "status") // ISPRAVAN TIP PORUKE
+        statusMsg.put("deviceId", deviceId)
+        statusMsg.put("status", "active") // Eksplicitno slanje statusa
 
-        val sent = sendMessage(heartbeatMsg.toString())
+        val sent = sendJsonMessage(statusMsg)
         if (sent) {
-            Log.d(TAG, "Sent heartbeat for device: $deviceId")
+            Log.d(TAG, "Poslan status/heartbeat za uređaj: $deviceId")
         } else {
-            Log.w(TAG, "Failed to send heartbeat for device: $deviceId (WebSocket not ready?)")
+            Log.w(TAG, "Neuspješno slanje statusa/heartbeat-a za uređaj: $deviceId (WebSocket nije spreman?)")
+        }
+    }
+
+    // --- NOVA FUNKCIJA ---
+    // Funkcija za slanje inicijalne registracijske poruke
+    private fun sendRegisterMessage(deviceId: String) {
+        val registerMsg = JSONObject()
+        registerMsg.put("type", "register")
+        registerMsg.put("deviceId", deviceId)
+
+        val sent = sendJsonMessage(registerMsg)
+        if (sent) {
+            Log.i(TAG, "Poslana registracijska poruka za uređaj: $deviceId")
+        } else {
+            Log.e(TAG, "Neuspješno slanje registracijske poruke za uređaj: $deviceId")
+            // Ovdje bi možda trebalo razmotriti zatvaranje konekcije ili ponovni pokušaj registracije
         }
     }
 
 
     fun disconnect(code: Int, reason: String) {
-        heartbeatJob?.cancel() // Stop sending heartbeats
+        heartbeatJob?.cancel() // Zaustavi slanje heartbeat-a
         heartbeatJob = null
         webSocket?.close(code, reason)
-        webSocket = null
-        Log.d(TAG, "Disconnect requested.")
+        webSocket = null // Eksplicitno postavi na null nakon zatvaranja
+        Log.d(TAG, "Zatraženo diskonektovanje: Kod=$code, Razlog=$reason")
     }
 
     fun shutdown() {
         heartbeatJob?.cancel()
         heartbeatJob = null
-        webSocket?.cancel()
+        webSocket?.cancel() // Koristi cancel() za trenutno oslobađanje resursa
         webSocket = null
-        clientScope.cancel() // Cancel coroutine scope
+        clientScope.cancel() // Otkaži sve korutine u ovom scope-u
+        // Nije preporučljivo gasiti cijeli executorService ako ga koristi i ostatak aplikacije
         // client.dispatcher.executorService.shutdown()
-        Log.d(TAG, "WebSocket client shut down.")
+        Log.i(TAG, "WebSocket klijent ugašen.")
     }
 
 
     private inner class SocketListener(
         private val deviceId: String,
-        private val url: String
+        private val url: String // Čuvamo URL za ponovne pokušaje
     ) : WebSocketListener() {
-        override fun onOpen(webSocket: WebSocket, response: Response) {
-            Log.d(TAG, "WebSocket connection opened for device: $deviceId")
-            listenerCallback?.onWebSocketOpen()
 
-            // Start sending heartbeats ONLY after connection is open
-            heartbeatJob?.cancel() // Cancel previous job if any
+        override fun onOpen(webSocket: WebSocket, response: Response) {
+            Log.i(TAG, "WebSocket konekcija otvorena za uređaj: $deviceId")
+            this@MyWebSocketClient.webSocket = webSocket // Ažuriraj referencu
+            retryCount = 0 // Resetuj brojač pokušaja nakon uspješnog otvaranja
+
+            // --- PROMIJENJEN REDOSLIJED I LOGIKA ---
+            // 1. PRVO POŠALJI REGISTRACIJSKU PORUKU
+            sendRegisterMessage(deviceId)
+
+            // 2. ONDA POKRENI PERIODIČNO SLANJE HEARTBEAT-A ("status")
+            heartbeatJob?.cancel() // Otkaži stari posao ako postoji
             heartbeatJob = clientScope.launch {
+                // Možda mali delay prije prvog heartbeat-a nakon registracije
+                delay(500)
                 while (isActive) {
-                    sendHeartbeatMessage(deviceId)
-                    delay(PING_INTERVAL_MS)
+                    sendStatusHeartbeatMessage(deviceId) // Šalji status/heartbeat
+                    delay(HEARTBEAT_SEND_INTERVAL_MS) // Koristi novi interval
                 }
             }
+            // Obavijesti listener da je konekcija otvorena (nakon inicijalnih koraka)
+            listenerCallback?.onWebSocketOpen()
         }
 
+        // onMessage ostaje uglavnom isti, obrađuje poruke primljene OD SERVERA
         override fun onMessage(webSocket: WebSocket, text: String) {
-            Log.d(TAG, "Received text message: $text")
-            // Handle server messages if needed
+            Log.d(TAG, "Primljena tekstualna poruka: $text")
+            listenerCallback?.onWebSocketMessage(text) // Proslijedi sirovu poruku listeneru
 
+            // Opcionalno: Osnovno parsiranje za logiranje ili specifične akcije unutar klijenta
             try {
                 val data = JSONObject(text)
+                val type = data.optString("type", "unknown") // Koristi optString za sigurnost
 
-                when (data.getString("type")) {
-
+                when (type) {
                     "signal" -> {
-                        val from = data.getString("from")
-                        val payload = data.getJSONObject("payload")
-                        Log.d(TAG, "Received signal from $from with payload: $payload")
-
-                        listenerCallback?.onWebSocketMessage("Received signal from $from with payload: $payload")
+                        val from = data.optString("from")
+                        val payload = data.optJSONObject("payload")
+                        Log.d(TAG, "Primljen signal od $from")
+                        // Dalja obrada signala se vjerovatno dešava u listenerCallback-u
                     }
-
                     "status" -> {
-                        val deviceId = data.getString("deviceId")
-                        val status = data.getString("status")
-                        Log.d(TAG, "Device $deviceId status: $status")
-
-                        listenerCallback?.onWebSocketMessage("Device $deviceId is $status")
+                        // Server ne bi trebao slati 'status' poruke nazad klijentu po trenutnoj logici
+                        Log.w(TAG, "Primljena 'status' poruka od servera? Neočekivano.")
                     }
-
                     "disconnect" -> {
-                        val deviceId = data.getString("deviceId")
-                        Log.d(TAG, "Device $deviceId has disconnected")
-
-                        listenerCallback?.onWebSocketMessage("Device $deviceId has disconnected")
+                        val reason = data.optString("reason", "nepoznat")
+                        Log.w(TAG, "Server je zatražio diskonekciju: $reason")
+                        // Možda pokrenuti logiku čišćenja ili obavijestiti korisnika
                     }
-
+                    // Ovdje možete dodati obradu drugih tipova poruka koje server može slati
                     else -> {
-                        Log.w(TAG, "Unknown message type: ${data.getString("type")}")
+                        Log.w(TAG, "Nepoznat tip poruke primljen od servera: $type")
                     }
                 }
-
             } catch (e: Exception) {
-                Log.e(TAG, "Error parsing message: $e")
+                Log.e(TAG, "Greška pri parsiranju primljene poruke: $text", e)
             }
-
         }
 
         override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
-            Log.d(TAG, "Received binary message: ${bytes.hex()}")
-            // Handle binary message if needed
+            Log.d(TAG, "Primljena binarna poruka: ${bytes.hex()}")
+            // Ovdje obraditi binarne poruke ako je potrebno
         }
 
         override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
-            Log.d(TAG, "WebSocket closing: Code=$code, Reason=$reason")
-            heartbeatJob?.cancel() // Stop sending heartbeats
+            Log.w(TAG, "WebSocket se zatvara: Kod=$code, Razlog=$reason")
+            heartbeatJob?.cancel() // Zaustavi slanje heartbeat-a
             heartbeatJob = null
-            webSocket.close(1000, null)
-            this@MyWebSocketClient.webSocket = null
+            // Ne treba zvati webSocket.close() ovdje, jer je već u procesu zatvaranja
+            this@MyWebSocketClient.webSocket = null // Očisti referencu
             listenerCallback?.onWebSocketClosing(code, reason)
         }
 
         override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-            Log.e(TAG, "WebSocket connection failure: ${t.message}", t)
-            heartbeatJob?.cancel() // Stop sending heartbeats
+            // Provjeri je li scope još aktivan prije pokretanja retry-a
+            if (!clientScope.isActive) {
+                Log.e(TAG,"WebSocket greška, ali scope nije aktivan. Ne pokušavam ponovo. Greška: ${t.message}")
+                return
+            }
+
+            Log.e(TAG, "WebSocket greška konekcije: ${t.message}", t)
+            heartbeatJob?.cancel() // Zaustavi slanje heartbeat-a
             heartbeatJob = null
-            this@MyWebSocketClient.webSocket = null
+            this@MyWebSocketClient.webSocket = null // Očisti referencu
             listenerCallback?.onWebSocketFailure(t, response)
 
+            // Pokreni logiku ponovnog pokušaja povezivanja
             retryConnection(url, deviceId)
         }
     }

@@ -22,7 +22,7 @@ class MainActivity : ComponentActivity() {
 
     private lateinit var wsClient: MyWebSocketClient
     private val TAG = "MainActivity"
-    private val WEBSOCKET_URL = "ws://192.168.1.15:8765" // Use WSS! Change as needed
+    private val WEBSOCKET_URL = "wss://remote-control-gateway.onrender.com/" // Use WSS! Change as needed
 
     // State variables
     private val connectionStatus = mutableStateOf("Disconnected")
