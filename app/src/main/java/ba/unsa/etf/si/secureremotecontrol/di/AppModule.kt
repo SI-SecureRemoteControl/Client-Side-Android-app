@@ -43,7 +43,10 @@ object AppModule {
 
     @Provides
     @Singleton
-    fun provideWebSocketService(client: OkHttpClient, gson: Gson): WebSocketService {
+    fun provideWebSocketService(
+        client: OkHttpClient,
+        gson: Gson
+    ): WebSocketService {
         return WebSocketServiceImpl(client, gson)
     }
 }
