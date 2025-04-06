@@ -5,11 +5,15 @@ import kotlinx.parcelize.Parcelize
 
 @Parcelize
 data class Device(
-    val id: String,
+    val deviceId: String,
     val name: String,
+    val registrationKey: String,
+    val status: DeviceStatus = DeviceStatus.OFFLINE,
     val model: String,
     val osVersion: String,
-    val status: DeviceStatus = DeviceStatus.OFFLINE
+    val networkType: String,
+    val ipAddress: String,
+    val deregistrationKey: String
 ) : Parcelable
 
 enum class DeviceStatus {
