@@ -17,7 +17,6 @@ fun RegisterScreen() {
     val deviceViewModel: DeviceViewModel = hiltViewModel()
     val deviceState by deviceViewModel.deviceState.collectAsState()
 
-    var name by remember { mutableStateOf("") }
     var registrationKey by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(false) }
     var showError by remember { mutableStateOf(false) }
@@ -55,15 +54,6 @@ fun RegisterScreen() {
         Spacer(modifier = Modifier.height(16.dp))
 
         OutlinedTextField(
-            value = name,
-            onValueChange = { name = it },
-            label = { Text("Device Name") },
-            modifier = Modifier.fillMaxWidth()
-        )
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        OutlinedTextField(
             value = registrationKey,
             onValueChange = { registrationKey = it },
             label = { Text("Registration key") },
@@ -89,12 +79,10 @@ fun RegisterScreen() {
                 showError = false
                 successMessage = ""
                 deviceViewModel.registerDevice(
-                    name = name,
-                    registrationKey = registrationKey,
-                    deregistrationKey = "deregistrationKey" // Replace with actual deregistration key
+                    registrationKey = registrationKey
                 )
             },
-            enabled = !isLoading && name.isNotBlank() && registrationKey.isNotBlank(),
+            enabled = !isLoading && registrationKey.isNotBlank(),
             modifier = Modifier.fillMaxWidth()
         ) {
             if (isLoading) {
