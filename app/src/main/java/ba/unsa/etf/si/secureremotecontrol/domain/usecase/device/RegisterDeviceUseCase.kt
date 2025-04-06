@@ -1,9 +1,12 @@
 package ba.unsa.etf.si.secureremotecontrol.domain.usecase.device
 
+import ba.unsa.etf.si.secureremotecontrol.data.api.ApiService
+import ba.unsa.etf.si.secureremotecontrol.data.api.WebSocketService
 import ba.unsa.etf.si.secureremotecontrol.data.models.Device
 import ba.unsa.etf.si.secureremotecontrol.data.repository.DeviceRepository
 import retrofit2.Response
 import javax.inject.Inject
+
 
 class RegisterDeviceUseCase @Inject constructor(
     private val deviceRepository: DeviceRepository

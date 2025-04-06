@@ -1,6 +1,8 @@
 package ba.unsa.etf.si.secureremotecontrol.data.repository
 
+import android.util.Log
 import ba.unsa.etf.si.secureremotecontrol.data.api.ApiService
+import ba.unsa.etf.si.secureremotecontrol.data.api.WebSocketService
 import ba.unsa.etf.si.secureremotecontrol.data.models.Device
 import ba.unsa.etf.si.secureremotecontrol.data.models.DeviceStatus
 import kotlinx.coroutines.flow.Flow
@@ -11,20 +13,27 @@ import javax.inject.Singleton
 
 @Singleton
 class DeviceRepositoryImpl @Inject constructor(
-    private val apiService: ApiService
+    private val apiService: ApiService,
+    private val webSocketService: WebSocketService
 ) : DeviceRepository {
     override suspend fun registerDevice(device: Device): Response<Void> {
-        return apiService.registerDevice(device)
+        return try {
+            webSocketService.connectWebSocket()
+            webSocketService.sendRegistration(device)
+            Response.success(null)
+        } catch (e: Exception) {
+            Response.error(500, okhttp3.ResponseBody.create(null, "Registration failed"))
+        } // Simulate a successful response
     }
 
     override suspend fun updateDeviceStatus(deviceId: String, status: DeviceStatus): Result<Device> {
         // TODO: Implement actual status update logic
-        return Result.success(Device(deviceId, "Test Device", "Test Model", "Android", status))
+        return Result.success(Device(deviceId, "Test Device", "Test key", status, "Test model", "Test OS", "Test network", "Test IP", "Test deregistration key"))
     }
 
     override suspend fun getDevice(deviceId: String): Result<Device> {
         // TODO: Implement actual device fetching logic
-        return Result.success(Device(deviceId, "Test Device", "Test Model", "Android", DeviceStatus.OFFLINE))
+        return Result.success(Device(deviceId, "Test Device", "Test key", DeviceStatus.OFFLINE, "Test model", "Test OS", "Test network", "Test IP", "Test deregistration key"))
     }
 
     override fun observeDeviceStatus(deviceId: String): Flow<DeviceStatus> = flow {
@@ -36,4 +45,4 @@ class DeviceRepositoryImpl @Inject constructor(
         // TODO: Implement actual device list fetching logic
         return Result.success(emptyList())
     }
-} 
+}

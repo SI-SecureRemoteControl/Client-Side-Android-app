@@ -1,61 +1,137 @@
 package ba.unsa.etf.si.secureremotecontrol.presentation.device
 
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
+import android.net.wifi.WifiManager
+import android.os.Build
+import android.provider.Settings
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import ba.unsa.etf.si.secureremotecontrol.data.models.Device
-import ba.unsa.etf.si.secureremotecontrol.domain.usecase.device.RegisterDeviceUseCase
+import ba.unsa.etf.si.secureremotecontrol.data.api.WebSocketService
+import com.google.gson.Gson
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
-import retrofit2.Response
+import java.net.InetAddress
+import java.net.NetworkInterface
+import java.util.*
 import javax.inject.Inject
-import android.provider.Settings
+import android.util.Log
 
 @HiltViewModel
 class DeviceViewModel @Inject constructor(
-    private val registerDeviceUseCase: RegisterDeviceUseCase,
-    @ApplicationContext private val context: Context // Dodajemo Context za generisanje Android ID
+    private val webSocketService: WebSocketService,
+    @ApplicationContext private val context: Context,
+    private val gson: Gson
 ) : ViewModel() {
 
     private val _deviceState = MutableStateFlow<DeviceState>(DeviceState.Initial)
     val deviceState: StateFlow<DeviceState> = _deviceState
 
-    fun registerDevice(name: String, model: String, osVersion: String) {
+    init {
+        connectAndObserveMessages()
+    }
+
+    private fun connectAndObserveMessages() {
+        viewModelScope.launch {
+            try {
+                webSocketService.connectWebSocket()
+                observeMessages()
+            } catch (e: Exception) {
+                Log.e("DeviceViewModel", "Failed to connect WebSocket: ${e.localizedMessage}")
+                _deviceState.value = DeviceState.Error("Failed to connect WebSocket")
+            }
+        }
+    }
+
+    private fun observeMessages() {
+        viewModelScope.launch {
+            webSocketService.observeMessages().collect { message ->
+                Log.d("DeviceViewModel", "Message received: $message")
+                val response = gson.fromJson(message, Map::class.java)
+                when (response["type"]) {
+                    "success" -> {
+                        Log.d("DeviceViewModel", "Device registered successfully")
+                        _deviceState.value = DeviceState.Registered(Device(
+                            deviceId = response["deviceId"] as String,
+                            name = response["name"] as String,
+                            registrationKey = response["registrationKey"] as String,
+                            model = response["model"] as String,
+                            osVersion = response["osVersion"] as String,
+                            networkType = response["networkType"] as String,
+                            ipAddress = response["ipAddress"] as String,
+                            deregistrationKey = response["deregistrationKey"] as String
+                        ))
+                    }
+                    "error" -> {
+                        Log.d("DeviceViewModel", "Error: ${response["message"]}")
+                        _deviceState.value = DeviceState.Error(response["message"] as String)
+                    }
+                }
+            }
+        }
+    }
+
+    fun registerDevice(name: String, registrationKey: String, deregistrationKey: String) {
         viewModelScope.launch {
             _deviceState.value = DeviceState.Loading
 
             try {
-                // Generisanje unique ID-a pomoću Android ID
                 val deviceId = Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID)
+                val model = Build.MODEL
+                val osVersion = Build.VERSION.RELEASE
+                val networkType = getNetworkType()
+                val ipAddress = getIpAddress()
 
-                // Kreiranje objekta Device
                 val device = Device(
-                    id = deviceId,
+                    deviceId = deviceId,
                     name = name,
+                    registrationKey = registrationKey,
                     model = model,
-                    osVersion = osVersion
+                    osVersion = osVersion,
+                    networkType = networkType,
+                    ipAddress = ipAddress,
+                    deregistrationKey = deregistrationKey
                 )
 
-                // Pozivamo UseCase za registraciju uređaja
-                val response: Response<Void> = registerDeviceUseCase(device)
-                if (response.isSuccessful) {
-                    _deviceState.value = DeviceState.Registered(device)
-                } else {
-                    _deviceState.value = DeviceState.Error("Registration failed: ${response.message()}")
-                }
+                webSocketService.sendRegistration(device)
             } catch (e: Exception) {
                 _deviceState.value = DeviceState.Error("Error: ${e.localizedMessage}")
             }
         }
     }
-}
 
+    private fun getNetworkType(): String {
+        val connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val network = connectivityManager.activeNetwork ?: return "Unknown"
+        val networkCapabilities = connectivityManager.getNetworkCapabilities(network) ?: return "Unknown"
+        return when {
+            networkCapabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "WiFi"
+            networkCapabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "Cellular"
+            else -> "Unknown"
+        }
+    }
+
+    private fun getIpAddress(): String {
+        val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+        val ipAddress = wifiManager.connectionInfo.ipAddress
+        return String.format(
+            Locale.getDefault(),
+            "%d.%d.%d.%d",
+            (ipAddress and 0xff),
+            (ipAddress shr 8 and 0xff),
+            (ipAddress shr 16 and 0xff),
+            (ipAddress shr 24 and 0xff)
+        )
+    }
+}
 sealed class DeviceState {
     object Initial : DeviceState()
     object Loading : DeviceState()
     data class Registered(val device: Device) : DeviceState()
     data class Error(val message: String) : DeviceState()
-} 
+}
