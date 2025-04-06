@@ -55,14 +55,14 @@ class DeviceViewModel @Inject constructor(
                     "success" -> {
                         Log.d("DeviceViewModel", "Device registered successfully")
                         _deviceState.value = DeviceState.Registered(Device(
-                            deviceId = "",
-                            name = "",
-                            registrationKey = "",
-//                            model = response["model"] as String,
-//                            osVersion = response["osVersion"] as String,
-//                            networkType = response["networkType"] as String,
-//                            ipAddress = response["ipAddress"] as String,
-//                            deregistrationKey = response["deregistrationKey"] as String
+                            deviceId = "a",
+                            name = "a",
+                            registrationKey = "a",
+                            model = "a",
+                            osVersion = "a",
+                            networkType = "a",
+                            ipAddress = "a",
+                            deregistrationKey = "a"
                         ))
                     }
                     "error" -> {
@@ -89,11 +89,11 @@ class DeviceViewModel @Inject constructor(
                     deviceId = deviceId,
                     name = name,
                     registrationKey = registrationKey,
-                    // model = "model",
-                    // osVersion = "osVersion",
-                    // networkType = "networkType",
-                    // ipAddress = "ipAddress",
-                    // deregistrationKey = "deregistrationKey"
+                    model = model,
+                    osVersion = osVersion,
+                    networkType = networkType,
+                    ipAddress = ipAddress,
+                    deregistrationKey = deregistrationKey
                 )
 
                 webSocketService.sendRegistration(device)
@@ -105,12 +105,12 @@ class DeviceViewModel @Inject constructor(
 
     private fun getNetworkType(): String {
         val connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-        val network = connectivityManager.activeNetwork ?: return "Unknown"
-        val networkCapabilities = connectivityManager.getNetworkCapabilities(network) ?: return "Unknown"
+        val network = connectivityManager.activeNetwork ?: return ""
+        val networkCapabilities = connectivityManager.getNetworkCapabilities(network) ?: return ""
         return when {
-            networkCapabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "WiFi"
-            networkCapabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "Cellular"
-            else -> "Unknown"
+            networkCapabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "wifi"
+            networkCapabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "mobileData"
+            else -> ""
         }
     }
 

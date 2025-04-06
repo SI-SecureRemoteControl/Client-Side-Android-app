@@ -91,7 +91,7 @@ fun RegisterScreen() {
                 deviceViewModel.registerDevice(
                     name = name,
                     registrationKey = registrationKey,
-                    deregistrationKey = ""
+                    deregistrationKey = "deregistrationKey" // Replace with actual deregistration key
                 )
             },
             enabled = !isLoading && name.isNotBlank() && registrationKey.isNotBlank(),

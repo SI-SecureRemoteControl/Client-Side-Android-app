@@ -53,11 +53,11 @@ class WebSocketServiceImpl @Inject constructor(
             "deviceId" to device.deviceId,
             "registrationKey" to device.registrationKey,
             "name" to device.name,
-//            "model" to device.model,
-//            "osVersion" to device.osVersion,
-//            "networkType" to device.networkType,
-//            "ipAddress" to device.ipAddress,
-//            "deregistrationKey" to device.deregistrationKey
+            "model" to device.model,
+            "osVersion" to device.osVersion,
+            "networkType" to device.networkType,
+            "ipAddress" to device.ipAddress,
+            "deregistrationKey" to device.deregistrationKey
         ))
         webSocket?.send(message)
     }

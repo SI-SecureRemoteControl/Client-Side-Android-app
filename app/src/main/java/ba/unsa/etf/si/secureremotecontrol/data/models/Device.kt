@@ -9,11 +9,11 @@ data class Device(
     val name: String,
     val registrationKey: String,
     val status: DeviceStatus = DeviceStatus.OFFLINE,
-    //val model: String,
-    //val osVersion: String,
-    //val networkType: String,
-    //val ipAddress: String,
-    //val deregistrationKey: String
+    val model: String,
+    val osVersion: String,
+    val networkType: String,
+    val ipAddress: String,
+    val deregistrationKey: String
 ) : Parcelable
 
 enum class DeviceStatus {
