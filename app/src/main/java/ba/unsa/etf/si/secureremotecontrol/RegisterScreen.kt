@@ -10,9 +10,10 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import ba.unsa.etf.si.secureremotecontrol.presentation.device.DeviceViewModel
 import ba.unsa.etf.si.secureremotecontrol.presentation.device.DeviceState
+import androidx.navigation.NavController
 
 @Composable
-fun RegisterScreen() {
+fun RegisterScreen(navController: NavController) {
     val context = LocalContext.current
     val deviceViewModel: DeviceViewModel = hiltViewModel()
     val deviceState by deviceViewModel.deviceState.collectAsState()
@@ -62,7 +63,6 @@ fun RegisterScreen() {
 
         Spacer(modifier = Modifier.height(8.dp))
 
-
         if (successMessage.isNotEmpty()) {
             Text(
                 text = successMessage,
@@ -93,6 +93,12 @@ fun RegisterScreen() {
             } else {
                 Text("Register Device")
             }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        Button(onClick = { navController.navigate("deregister") }) {
+            Text("Go to Deregistration")
         }
     }
 }
