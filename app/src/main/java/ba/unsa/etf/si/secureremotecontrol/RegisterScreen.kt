@@ -1,5 +1,7 @@
 package ba.unsa.etf.si.secureremotecontrol.ui.screens
 
+import android.os.Handler
+import android.os.Looper
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -21,6 +23,19 @@ fun RegisterScreen() {
     var isLoading by remember { mutableStateOf(false) }
     var showError by remember { mutableStateOf(false) }
     var successMessage by remember { mutableStateOf("") }
+    var timeoutReached by remember { mutableStateOf(false) }
+
+    LaunchedEffect(isLoading) {
+        if (isLoading) {
+            timeoutReached = false
+            Handler(Looper.getMainLooper()).postDelayed({
+                if (isLoading) {
+                    timeoutReached = true
+                    isLoading = false
+                }
+            }, 5000)
+        }
+    }
 
     LaunchedEffect(deviceState) {
         when (deviceState) {
@@ -70,6 +85,13 @@ fun RegisterScreen() {
                 modifier = Modifier.padding(top = 8.dp)
             )
         }
+        if (timeoutReached) {
+            Text(
+                text = "Registration timed out. Please try again.",
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.padding(top = 8.dp)
+            )
+        }
 
         Spacer(modifier = Modifier.height(24.dp))
 
@@ -78,11 +100,12 @@ fun RegisterScreen() {
                 isLoading = true
                 showError = false
                 successMessage = ""
+                timeoutReached = false
                 deviceViewModel.registerDevice(
                     registrationKey = registrationKey
                 )
             },
-            enabled = !isLoading && registrationKey.isNotBlank(),
+            enabled = !isLoading && registrationKey.isNotBlank() && !timeoutReached,
             modifier = Modifier.fillMaxWidth()
         ) {
             if (isLoading) {
