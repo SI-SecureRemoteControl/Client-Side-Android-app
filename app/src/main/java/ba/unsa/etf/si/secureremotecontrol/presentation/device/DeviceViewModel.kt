@@ -19,11 +19,13 @@ import kotlinx.coroutines.launch
 import java.util.*
 import javax.inject.Inject
 import android.util.Log
+import ba.unsa.etf.si.secureremotecontrol.data.util.RegistrationPreferences
 
 @HiltViewModel
 class DeviceViewModel @Inject constructor(
     private val webSocketService: WebSocketService,
     @ApplicationContext private val context: Context,
+    private val registrationPrefs: RegistrationPreferences,
     private val gson: Gson
 ) : ViewModel() {
 
@@ -87,6 +89,22 @@ class DeviceViewModel @Inject constructor(
                 )
 
                 webSocketService.sendRegistration(device)
+
+                try {
+                    Log.i("RegistrationVM", "Creating registration data")
+                    registrationPrefs.saveRegistrationDetails(deviceId) // <<< Clears SharedPreferences
+
+                    Log.i("RegistrationVM", "Starting WebSocket heartbeat...")
+                    webSocketService.startHeartbeat(deviceId)// <<< Stops WebSocket pings
+
+                    Log.i("DeregistrationVM", "Disconnecting WebSocket...")
+                     // <<< Disconnects WebSocket
+
+                } catch (cleanupException: Exception) {
+                    // Log error during cleanup but don't fail the overall success state
+                    Log.e("DeregistrationVM", "Error during post-registration settings", cleanupException)
+                }
+
             } catch (e: Exception) {
                 _deviceState.value = DeviceState.Error("Error: ${e.localizedMessage}")
             }

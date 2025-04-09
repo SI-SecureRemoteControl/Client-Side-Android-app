@@ -45,9 +45,7 @@
             android:enabled="true"
             android:exported="false" />
 
-        <service
-            android:name=".service.HeartbeatService"
-            android:exported="false" />
+
 
     </application>
 

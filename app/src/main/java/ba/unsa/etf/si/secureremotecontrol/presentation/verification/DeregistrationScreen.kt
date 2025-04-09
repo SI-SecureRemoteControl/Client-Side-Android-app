@@ -1,4 +1,4 @@
-package ba.unsa.etf.si.secureremotecontrol.presentation.verification // Preporučujem promjenu imena paketa/foldera
+package ba.unsa.etf.si.secureremotecontrol.presentation.verification // Package name as needed
 
 import android.provider.Settings
 import androidx.compose.foundation.layout.*
@@ -10,47 +10,49 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.viewmodel.compose.viewModel
+// import androidx.lifecycle.viewmodel.compose.viewModel // NO LONGER NEEDED for standard viewModel()
+import androidx.hilt.navigation.compose.hiltViewModel // <<< --- ADD THIS IMPORT
 import androidx.navigation.NavController
 import kotlinx.coroutines.delay
-import ba.unsa.etf.si.secureremotecontrol.presentation.verification.VerificationViewModel // ViewModel ostaje isti
+import ba.unsa.etf.si.secureremotecontrol.presentation.verification.VerificationViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-// PREIMENOVANO: Funkcija sada jasno opisuje svrhu ekrana
 fun DeregistrationScreen(
-    navController: NavController,
-    // ViewModel instanca se i dalje koristi
-    viewModel: VerificationViewModel = viewModel()
+    navController: NavController
+    // Remove viewModel parameter from here
 ) {
-    val context = LocalContext.current
-    val deviceId = Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID) ?: "nepoznat_id"
+    // --- *** GET VIEWMODEL INSTANCE USING HILT *** ---
+    val viewModel: VerificationViewModel = hiltViewModel()
+    // --- *** ------------------------------------ *** ---
 
-    // --- KORISTIMO STANJE ZA DEREGISTRACIJU ---
+    val context = LocalContext.current
+    // Consider making deviceId retrieval safer or providing a fallback if needed elsewhere
+    val deviceId = remember { // Use remember to avoid retrieving it on every recomposition
+        Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID) ?: "unknown_device_id"
+    }
+
+    // --- KORISTIMO STANJE ZA DEREGISTRACIJU --- (State remains the same)
+    val deregistrationKey = viewModel.deregistrationKey // Directly access state from viewModel
     val deregistrationMessage = viewModel.deregistrationServerMessage
     val isDeregistrationSuccess = viewModel.isDeregistrationSuccessful
     val isDeregistrationLoading = viewModel.isDeregistrationLoading
     // -------------------------------------------
 
     // Reaguj kada se poruka za DEREGISTRACIJU promijeni
-    LaunchedEffect(key1 = deregistrationMessage, key2 = isDeregistrationSuccess) {
-        if (deregistrationMessage != null && isDeregistrationSuccess == true) {
-            // Nakon uspješne deregistracije, možda želite nazad ili na login?
-            delay(2500) // Malo kraće čekanje za poruku
-            // Primjer: Idi nazad na prethodni ekran
-            navController.popBackStack()
-            // Ili idi na specifičnu rutu, npr., login:
-            // navController.navigate("login") {
-            //     popUpTo(navController.graph.startDestinationId) { inclusive = true }
-            //     launchSingleTop = true
-            // }
+    LaunchedEffect(key1 = isDeregistrationSuccess) { // Trigger only when success status changes definitively
+        if (isDeregistrationSuccess == true) {
+            // Optional: Display success message briefly before navigating
+            delay(2000) // Keep a short delay for user feedback
+            navController.popBackStack() // Go back after successful deregistration
+            // Reset ViewModel state if needed after navigation (though Hilt might scope it correctly)
+            // viewModel.resetDeregistrationState() // You might need to add this method to your ViewModel
         }
     }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                // Ažuriran naslov
                 title = { Text("Deregistracija Uređaja") },
                 navigationIcon = {
                     IconButton(onClick = { navController.navigateUp() }) {
@@ -71,53 +73,51 @@ fun DeregistrationScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
-            // Ažuriran tekst
             Text("Unesite ključ za deregistraciju:", style = MaterialTheme.typography.headlineSmall)
             Spacer(modifier = Modifier.height(16.dp))
 
-            // --- INPUT FIELD ZA DEREGISTRACIJSKI KLJUČ ---
             OutlinedTextField(
-                value = viewModel.deregistrationKey, // Koristi 'deregistrationKey'
-                onValueChange = { viewModel.updateDeregistrationKey(it) }, // Poziva 'updateDeregistrationKey'
-                label = { Text("Ključ za deregistraciju") }, // Ažurirana labela
+                value = deregistrationKey, // Use the state variable
+                onValueChange = { viewModel.updateDeregistrationKey(it) }, // Call ViewModel update function
+                label = { Text("Ključ za deregistraciju") },
                 singleLine = true,
+                isError = isDeregistrationSuccess == false && deregistrationMessage != null, // Show error state on the field
                 modifier = Modifier.fillMaxWidth()
             )
-            // --------------------------------------------
             Spacer(modifier = Modifier.height(16.dp))
 
-            // Prikaz poruke za DEREGISTRACIJU (ako postoji)
+            // Display message (success or error)
             deregistrationMessage?.let { message ->
                 Text(
                     text = message,
                     color = if (isDeregistrationSuccess == true)
-                        MaterialTheme.colorScheme.primary
+                        MaterialTheme.colorScheme.primary // Or a specific success color
                     else
                         MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodyMedium, // Use appropriate style
                     modifier = Modifier.padding(bottom = 8.dp)
                 )
             }
 
-            // Prikaz indikatora učitavanja za DEREGISTRACIJU
+            // Show loading indicator OR the button
             if (isDeregistrationLoading) {
                 CircularProgressIndicator(modifier = Modifier.padding(bottom = 8.dp))
+            } else {
+                Button(
+                    onClick = { viewModel.deregisterDevice(deviceId) },
+                    enabled = deregistrationKey.isNotBlank(), // Enable only if key is not blank
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Potvrdi Deregistraciju")
+                }
             }
-
-            // --- DUGME ZA DEREGISTRACIJU ---
-            Button(
-                // POZIVA ISPRAVNU FUNKCIJU
-                onClick = { viewModel.deregisterDevice(deviceId) },
-                // Omogućeno ako NIJE učitavanje DEREGISTRACIJE i ako ključ NIJE prazan
-                enabled = !isDeregistrationLoading && viewModel.deregistrationKey.isNotBlank(),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                // Ažuriran tekst dugmeta
-                Text("Potvrdi Deregistraciju")
-            }
-            // -----------------------------
 
             Spacer(modifier = Modifier.height(24.dp))
-            Text("ID Uređaja: $deviceId", style = MaterialTheme.typography.bodySmall)
+            Text(
+                "ID Uređaja: $deviceId",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant // Softer color
+            )
         }
     }
 }

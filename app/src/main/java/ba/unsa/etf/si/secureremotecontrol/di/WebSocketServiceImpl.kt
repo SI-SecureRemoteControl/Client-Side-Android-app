@@ -83,7 +83,7 @@ class WebSocketServiceImpl @Inject constructor(
         stopHeartbeat()
     }
 
-    private fun startHeartbeat(deviceId: String) {
+     override fun startHeartbeat(deviceId: String) {
         heartbeatJob?.cancel()
         heartbeatJob = clientScope.launch {
             delay(500)
@@ -94,7 +94,7 @@ class WebSocketServiceImpl @Inject constructor(
         }
     }
 
-    private fun stopHeartbeat() {
+     override fun stopHeartbeat() {
         heartbeatJob?.cancel()
         heartbeatJob = null
     }
