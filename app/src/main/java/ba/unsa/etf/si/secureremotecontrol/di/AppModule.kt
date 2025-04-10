@@ -12,7 +12,9 @@ import okhttp3.OkHttpClient
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 import javax.inject.Singleton
-
+import dagger.hilt.android.qualifiers.ApplicationContext
+import android.content.Context
+import ba.unsa.etf.si.secureremotecontrol.data.util.RegistrationPreferences
 @Module
 @InstallIn(SingletonComponent::class)
 object AppModule {
@@ -20,6 +22,13 @@ object AppModule {
     @Provides
     @Singleton
     fun provideGson(): Gson = Gson()
+
+    @Provides
+    @Singleton // Ensures only one instance is created
+    fun provideRegistrationPreferences(@ApplicationContext context: Context): RegistrationPreferences {
+        // Hilt provides the application context automatically
+        return RegistrationPreferences(context)
+    }
 
     @Provides
     @Singleton

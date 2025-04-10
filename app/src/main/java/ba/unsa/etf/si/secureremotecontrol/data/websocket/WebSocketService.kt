@@ -9,5 +9,6 @@ interface WebSocketService {
     fun observeMessages(): Flow<String>
     fun sendRegistration(device: Device)
     fun disconnect()
-
+    fun startHeartbeat(deviceId: String)
+    fun stopHeartbeat()
 }
