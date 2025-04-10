@@ -53,7 +53,7 @@ fun DeregistrationScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Deregistracija Uređaja") },
+                title = { Text("Device Deregistration") },
                 navigationIcon = {
                     IconButton(onClick = { navController.navigateUp() }) {
                         Icon(
@@ -73,13 +73,13 @@ fun DeregistrationScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
-            Text("Unesite ključ za deregistraciju:", style = MaterialTheme.typography.headlineSmall)
+            Text("Enter Deregistration key", style = MaterialTheme.typography.headlineSmall)
             Spacer(modifier = Modifier.height(16.dp))
 
             OutlinedTextField(
                 value = deregistrationKey, // Use the state variable
                 onValueChange = { viewModel.updateDeregistrationKey(it) }, // Call ViewModel update function
-                label = { Text("Ključ za deregistraciju") },
+                label = { Text("Deregistration key") },
                 singleLine = true,
                 isError = isDeregistrationSuccess == false && deregistrationMessage != null, // Show error state on the field
                 modifier = Modifier.fillMaxWidth()
@@ -108,7 +108,7 @@ fun DeregistrationScreen(
                     enabled = deregistrationKey.isNotBlank(), // Enable only if key is not blank
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Text("Potvrdi Deregistraciju")
+                    Text("Confirm Deregistration")
                 }
             }
 
