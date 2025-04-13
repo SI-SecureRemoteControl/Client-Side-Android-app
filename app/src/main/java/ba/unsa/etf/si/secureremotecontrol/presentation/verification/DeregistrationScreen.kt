@@ -19,7 +19,8 @@ import ba.unsa.etf.si.secureremotecontrol.presentation.verification.Verification
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DeregistrationScreen(
-    navController: NavController
+    navController: NavController,
+    onDeregisterSuccess: () -> Unit = {}, // Optional: Add this if you need to handle registration success
     // Remove viewModel parameter from here
 ) {
     // --- *** GET VIEWMODEL INSTANCE USING HILT *** ---
@@ -44,7 +45,7 @@ fun DeregistrationScreen(
         if (isDeregistrationSuccess == true) {
             // Optional: Display success message briefly before navigating
             delay(2000) // Keep a short delay for user feedback
-            navController.popBackStack() // Go back after successful deregistration
+            onDeregisterSuccess() // Go back after successful deregistration
             // Reset ViewModel state if needed after navigation (though Hilt might scope it correctly)
             // viewModel.resetDeregistrationState() // You might need to add this method to your ViewModel
         }

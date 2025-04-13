@@ -19,6 +19,7 @@ import kotlinx.coroutines.launch
 import java.util.*
 import javax.inject.Inject
 import android.util.Log
+import ba.unsa.etf.si.secureremotecontrol.data.datastore.TokenDataStore
 import ba.unsa.etf.si.secureremotecontrol.data.util.RegistrationPreferences
 
 @HiltViewModel
@@ -26,7 +27,8 @@ class DeviceViewModel @Inject constructor(
     private val webSocketService: WebSocketService,
     @ApplicationContext private val context: Context,
     private val registrationPrefs: RegistrationPreferences,
-    private val gson: Gson
+    private val gson: Gson,
+    private val tokenDataStore: TokenDataStore
 ) : ViewModel() {
 
     private val _deviceState = MutableStateFlow<DeviceState>(DeviceState.Initial)
@@ -55,7 +57,12 @@ class DeviceViewModel @Inject constructor(
                 val response = gson.fromJson(message, Map::class.java)
                 when (response["type"]) {
                     "success" -> {
-                        Log.d("DeviceViewModel", "Device registered successfully")
+                        Log.d("DeviceViewModel", "Success: ${response["message"]}")
+                        val token = response["token"] as String
+                        Log.d("DeviceViewModel", "Token: $token")
+                        viewModelScope.launch {
+                            tokenDataStore.saveToken(token)
+                        }
                         _deviceState.value = DeviceState.Registered(Device(
                             deviceId = "a",
                             registrationKey = "a",
@@ -87,7 +94,7 @@ class DeviceViewModel @Inject constructor(
                     model = model,
                     osVersion = osVersion
                 )
-
+                Log.d("DeviceViewModel", "Device ID: $deviceId")
                 webSocketService.sendRegistration(device)
 
                 try {
@@ -95,9 +102,8 @@ class DeviceViewModel @Inject constructor(
                     registrationPrefs.saveRegistrationDetails(deviceId) // <<< Clears SharedPreferences
 
                     Log.i("RegistrationVM", "Starting WebSocket heartbeat...")
-                    webSocketService.startHeartbeat(deviceId)// <<< Stops WebSocket pings
+                    //webSocketService.startHeartbeat(deviceId)// <<< Stops WebSocket pings
 
-                    Log.i("DeregistrationVM", "Disconnecting WebSocket...")
                      // <<< Disconnects WebSocket
 
                 } catch (cleanupException: Exception) {

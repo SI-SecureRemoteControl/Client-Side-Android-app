@@ -99,6 +99,16 @@ class WebSocketServiceImpl @Inject constructor(
         heartbeatJob = null
     }
 
+    override fun sendSessionRequest(from: String, token: String) {
+        val message = gson.toJson(mapOf(
+            "type" to "session_request",
+            "from" to from,
+            "token" to token
+        ))
+        webSocket?.send(message)
+        Log.d("WebSocket", "Session request sent from $from")
+    }
+
     private fun sendStatusHeartbeatMessage(deviceId: String) {
         val statusMsg = JSONObject().apply {
             put("type", "status")
