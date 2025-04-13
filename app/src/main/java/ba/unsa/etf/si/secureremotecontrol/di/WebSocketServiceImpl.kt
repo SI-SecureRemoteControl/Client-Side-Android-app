@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import org.json.JSONObject
@@ -21,7 +22,7 @@ class WebSocketServiceImpl @Inject constructor(
     private val client: OkHttpClient,
     private val gson: Gson
 ) : WebSocketService {
-    private var webSocket: WebSocket? = null
+
     private var heartbeatJob: Job? = null
     private val clientScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
@@ -30,13 +31,33 @@ class WebSocketServiceImpl @Inject constructor(
     private val RETRY_DELAY_MS = 5000L // 5s
     private var retryCount = 0
 
-    override fun connectWebSocket(): WebSocket {
-        val request = Request.Builder()
-            .url("wss://remote-control-gateway.onrender.com/")
-            .build()
+    private var webSocket: WebSocket? = null
+    private var isConnected = false
 
-        return client.newWebSocket(request, createWebSocketListener())
-            .also { webSocket = it }
+    override fun connectWebSocket(): WebSocket {
+        if (isConnected) {
+            Log.d("WebSocketService", "WebSocket is already connected.")
+            return webSocket!!
+        }
+
+        val request = Request.Builder().url("wss://remote-control-gateway.onrender.com/").build()
+        webSocket = client.newWebSocket(request, object : WebSocketListener() {
+            override fun onOpen(webSocket: WebSocket, response: Response) {
+                isConnected = true
+                Log.d("WebSocketService", "WebSocket connected.")
+            }
+
+            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                isConnected = false
+                Log.e("WebSocketService", "WebSocket connection failed: ${t.message}")
+            }
+
+            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                isConnected = false
+                Log.d("WebSocketService", "WebSocket closed: $reason")
+            }
+        })
+        return webSocket!!
     }
 
     override fun observeMessages(): Flow<String> = callbackFlow {
@@ -68,10 +89,21 @@ class WebSocketServiceImpl @Inject constructor(
         startHeartbeat(device.deviceId)
     }
 
+    override fun sendFinalConformation(from: String, token: String, decision: Boolean) {
+        val message = gson.toJson(mapOf(
+            "type" to "session_final_confirmation",
+            "from" to from,
+            "token" to token,
+            "decision" to if (decision) "accepted" else "rejected"
+        ))
+        webSocket?.send(message)
+    }
+
     override fun disconnect() {
         stopHeartbeat()
-        webSocket?.close(1000, "Disconnecting")
+        webSocket?.close(1000, "Closing WebSocket")
         webSocket = null
+        isConnected = false
     }
 
     fun sendDeregistration(device: Device) {
@@ -100,6 +132,10 @@ class WebSocketServiceImpl @Inject constructor(
     }
 
     override fun sendSessionRequest(from: String, token: String) {
+        if (!isConnected) {
+            Log.e("WebSocketService", "Cannot send session request: WebSocket is not connected.")
+            return
+        }
         val message = gson.toJson(mapOf(
             "type" to "session_request",
             "from" to from,

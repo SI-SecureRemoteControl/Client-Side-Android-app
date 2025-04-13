@@ -8,6 +8,7 @@ interface WebSocketService {
     fun connectWebSocket(): WebSocket
     fun observeMessages(): Flow<String>
     fun sendRegistration(device: Device)
+    fun sendFinalConformation(from: String, token: String, decision: Boolean)
     fun sendSessionRequest(from: String, token: String)
     fun disconnect()
     fun startHeartbeat(deviceId: String)

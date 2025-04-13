@@ -1,3 +1,4 @@
 <resources>
     <string name="app_name">SecureRemoteControl</string>
+    <string name="title">Welcome to\nSecure Remote Control</string>
 </resources>

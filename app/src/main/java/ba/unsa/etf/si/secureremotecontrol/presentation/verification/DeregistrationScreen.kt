@@ -1,6 +1,7 @@
 package ba.unsa.etf.si.secureremotecontrol.presentation.verification // Package name as needed
 
 import android.provider.Settings
+import android.widget.Toast
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
@@ -20,34 +21,26 @@ import ba.unsa.etf.si.secureremotecontrol.presentation.verification.Verification
 @Composable
 fun DeregistrationScreen(
     navController: NavController,
-    onDeregisterSuccess: () -> Unit = {}, // Optional: Add this if you need to handle registration success
-    // Remove viewModel parameter from here
+    onDeregisterSuccess: () -> Unit = {}
 ) {
-    // --- *** GET VIEWMODEL INSTANCE USING HILT *** ---
     val viewModel: VerificationViewModel = hiltViewModel()
-    // --- *** ------------------------------------ *** ---
-
     val context = LocalContext.current
-    // Consider making deviceId retrieval safer or providing a fallback if needed elsewhere
-    val deviceId = remember { // Use remember to avoid retrieving it on every recomposition
-        Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID) ?: "unknown_device_id"
+
+    val deviceId = remember {
+        Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID)
+            ?: "unknown_device_id"
     }
 
-    // --- KORISTIMO STANJE ZA DEREGISTRACIJU --- (State remains the same)
-    val deregistrationKey = viewModel.deregistrationKey // Directly access state from viewModel
+    val deregistrationKey = viewModel.deregistrationKey
     val deregistrationMessage = viewModel.deregistrationServerMessage
     val isDeregistrationSuccess = viewModel.isDeregistrationSuccessful
     val isDeregistrationLoading = viewModel.isDeregistrationLoading
-    // -------------------------------------------
 
-    // Reaguj kada se poruka za DEREGISTRACIJU promijeni
-    LaunchedEffect(key1 = isDeregistrationSuccess) { // Trigger only when success status changes definitively
+    LaunchedEffect(key1 = isDeregistrationSuccess) {
         if (isDeregistrationSuccess == true) {
-            // Optional: Display success message briefly before navigating
-            delay(2000) // Keep a short delay for user feedback
-            onDeregisterSuccess() // Go back after successful deregistration
-            // Reset ViewModel state if needed after navigation (though Hilt might scope it correctly)
-            // viewModel.resetDeregistrationState() // You might need to add this method to your ViewModel
+            Toast.makeText(context, "Deregistration successful!", Toast.LENGTH_SHORT).show()
+            delay(2000)
+            onDeregisterSuccess()
         }
     }
 
@@ -59,7 +52,7 @@ fun DeregistrationScreen(
                     IconButton(onClick = { navController.navigateUp() }) {
                         Icon(
                             imageVector = Icons.Filled.ArrowBack,
-                            contentDescription = "Nazad"
+                            contentDescription = "Back"
                         )
                     }
                 }
@@ -78,47 +71,23 @@ fun DeregistrationScreen(
             Spacer(modifier = Modifier.height(16.dp))
 
             OutlinedTextField(
-                value = deregistrationKey, // Use the state variable
-                onValueChange = { viewModel.updateDeregistrationKey(it) }, // Call ViewModel update function
+                value = deregistrationKey,
+                onValueChange = { viewModel.updateDeregistrationKey(it) },
                 label = { Text("Deregistration key") },
                 singleLine = true,
-                isError = isDeregistrationSuccess == false && deregistrationMessage != null, // Show error state on the field
+                isError = isDeregistrationSuccess == false && deregistrationMessage != null,
                 modifier = Modifier.fillMaxWidth()
             )
             Spacer(modifier = Modifier.height(16.dp))
 
-            // Display message (success or error)
-            deregistrationMessage?.let { message ->
-                Text(
-                    text = message,
-                    color = if (isDeregistrationSuccess == true)
-                        MaterialTheme.colorScheme.primary // Or a specific success color
-                    else
-                        MaterialTheme.colorScheme.error,
-                    style = MaterialTheme.typography.bodyMedium, // Use appropriate style
-                    modifier = Modifier.padding(bottom = 8.dp)
-                )
+            Button(
+                onClick = { viewModel.deregisterDevice(deviceId) },
+                enabled = deregistrationKey.isNotBlank() && isDeregistrationLoading.not(),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Confirm Deregistration")
             }
-
-            // Show loading indicator OR the button
-            if (isDeregistrationLoading) {
-                CircularProgressIndicator(modifier = Modifier.padding(bottom = 8.dp))
-            } else {
-                Button(
-                    onClick = { viewModel.deregisterDevice(deviceId) },
-                    enabled = deregistrationKey.isNotBlank(), // Enable only if key is not blank
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("Confirm Deregistration")
-                }
-            }
-
-            Spacer(modifier = Modifier.height(24.dp))
-            Text(
-                "ID Uređaja: $deviceId",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant // Softer color
-            )
         }
+
     }
 }

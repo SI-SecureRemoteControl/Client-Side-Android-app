@@ -12,6 +12,7 @@ import ba.unsa.etf.si.secureremotecontrol.data.network.DeregisterResponse
 import ba.unsa.etf.si.secureremotecontrol.data.network.RetrofitClient // Keep for now, but ideally inject ApiService
 import ba.unsa.etf.si.secureremotecontrol.data.util.RegistrationPreferences // Import your SharedPreferences wrapper
 import ba.unsa.etf.si.secureremotecontrol.data.api.WebSocketService // Import WebSocket service interface
+import ba.unsa.etf.si.secureremotecontrol.data.datastore.TokenDataStore
 import com.google.gson.Gson
 import dagger.hilt.android.lifecycle.HiltViewModel // Import for Hilt ViewModel
 import kotlinx.coroutines.launch
@@ -22,7 +23,8 @@ import javax.inject.Inject // Import for Hilt injection
 @HiltViewModel // *** Mark ViewModel for Hilt injection ***
 class VerificationViewModel @Inject constructor( // *** Inject dependencies via constructor ***
     private val registrationPrefs: RegistrationPreferences,
-    private val webSocketService: WebSocketService
+    private val webSocketService: WebSocketService,
+    private val tokenDataStore: TokenDataStore
     // Consider injecting your Retrofit API service interface instead of using RetrofitClient.instance directly in the future
 ) : ViewModel() {
 
@@ -95,9 +97,9 @@ class VerificationViewModel @Inject constructor( // *** Inject dependencies via 
                             Log.i("DeregistrationVM", "Stopping WebSocket heartbeat...")
                             webSocketService.stopHeartbeat() // <<< Stops WebSocket pings
 
-                            Log.i("DeregistrationVM", "Disconnecting WebSocket...")
-                            webSocketService.disconnect() // <<< Disconnects WebSocket
+                            Log.i("DeregistrationVM", "Disconnecting WebSocket...") // <<< Disconnects WebSocket
 
+                            tokenDataStore.clearToken()
                         } catch (cleanupException: Exception) {
                             // Log error during cleanup but don't fail the overall success state
                             Log.e("DeregistrationVM", "Error during post-deregistration cleanup", cleanupException)

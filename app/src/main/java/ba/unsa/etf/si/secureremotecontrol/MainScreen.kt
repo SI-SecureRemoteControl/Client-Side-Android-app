@@ -1,6 +1,7 @@
 package ba.unsa.etf.si.secureremotecontrol
 
 import android.widget.Toast
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -11,7 +12,13 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import ba.unsa.etf.si.secureremotecontrol.presentation.main.MainViewModel
@@ -22,11 +29,46 @@ fun MainScreen(
     viewModel: MainViewModel = hiltViewModel(),
     onDeregister: () -> Unit
 ) {
-    var toDeviceId by remember { mutableStateOf("") }
     val sessionState by viewModel.sessionState.collectAsState()
     var buttonEnabled by remember { mutableStateOf(true) }
 
     val context = LocalContext.current
+
+    when (sessionState) {
+        is SessionState.Rejected -> {
+            Toast.makeText(context, "Session request rejected.", Toast.LENGTH_LONG).show()
+            viewModel.resetSessionState()
+        }
+        is SessionState.Accepted -> {
+            var showDialog by remember { mutableStateOf(true) }
+
+            if (showDialog) {
+                AlertDialog(
+                    onDismissRequest = { showDialog = false },
+                    title = { Text("Confirm Session") },
+                    text = { Text("Do you want to confirm the session?") },
+                    confirmButton = {
+                        Button(onClick = {
+                            showDialog = false
+                            viewModel.sendSessionFinalConfirmation(true) // User accepted
+                        }) {
+                            Text("Yes")
+                        }
+                    },
+                    dismissButton = {
+                        Button(onClick = {
+                            showDialog = false
+                            viewModel.sendSessionFinalConfirmation(false) // User rejected
+                        }) {
+                            Text("No")
+                        }
+                    }
+                )
+            }
+        }
+        else -> {}
+    }
+
 
     Column(
         modifier = Modifier
@@ -35,25 +77,38 @@ fun MainScreen(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        OutlinedTextField(
-            value = toDeviceId,
-            onValueChange = { toDeviceId = it },
-            label = { Text("Target Device ID") }
+        Image(
+            painter = painterResource(id = R.mipmap.ic_launcher_foreground),
+            contentDescription = stringResource(id = R.string.app_name),
+            modifier = Modifier
+                .height(180.dp).graphicsLayer(
+                    scaleX = 2.5f,
+                    scaleY = 2.5f,
+                    translationX = 10f
+                )
         )
 
-        Spacer(modifier = Modifier.height(16.dp))
+        Text(
+            textAlign = TextAlign.Center,
+            text = stringResource(id = R.string.title),
+            style = MaterialTheme.typography.headlineMedium,
+            color = MaterialTheme.colorScheme.primary,
+            fontWeight = FontWeight.Bold,
+        )
+
+        Spacer(modifier = Modifier.height(64.dp))
 
         Button(
             onClick = {
                 buttonEnabled = false
-                viewModel.requestSession(toDeviceId)
+                viewModel.requestSession()
             },
             enabled = buttonEnabled
         ) {
             Text("Request Session")
         }
 
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(8.dp))
 
         when (sessionState) {
             is SessionState.Requesting -> Text("Requesting session...")
@@ -62,6 +117,7 @@ fun MainScreen(
                 buttonEnabled = true
             }
             is SessionState.Accepted -> Text("Session accepted!")
+            is SessionState.Waiting -> Text("Waiting for response...")
             is SessionState.Rejected -> {
                 Text("Session rejected.")
                 buttonEnabled = true
@@ -75,9 +131,8 @@ fun MainScreen(
             else -> {}
         }
 
-        Spacer(modifier = Modifier.height(24.dp))
 
-        Button(onClick = { onDeregister() }) {
+        Button(onClick = { viewModel.stopObservingMessages(); onDeregister() }, enabled = buttonEnabled) {
             Text("Deregister Device")
         }
     }

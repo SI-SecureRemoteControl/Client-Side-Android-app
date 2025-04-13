@@ -21,6 +21,7 @@ import javax.inject.Inject
 import android.util.Log
 import ba.unsa.etf.si.secureremotecontrol.data.datastore.TokenDataStore
 import ba.unsa.etf.si.secureremotecontrol.data.util.RegistrationPreferences
+import kotlinx.coroutines.Job
 
 @HiltViewModel
 class DeviceViewModel @Inject constructor(
@@ -33,6 +34,8 @@ class DeviceViewModel @Inject constructor(
 
     private val _deviceState = MutableStateFlow<DeviceState>(DeviceState.Initial)
     val deviceState: StateFlow<DeviceState> = _deviceState
+
+    private var messageObservationJob: Job? = null
 
     init {
         connectAndObserveMessages()
@@ -51,7 +54,7 @@ class DeviceViewModel @Inject constructor(
     }
 
     private fun observeMessages() {
-        viewModelScope.launch {
+        messageObservationJob = viewModelScope.launch {
             webSocketService.observeMessages().collect { message ->
                 Log.d("DeviceViewModel", "Message received: $message")
                 val response = gson.fromJson(message, Map::class.java)
@@ -69,6 +72,7 @@ class DeviceViewModel @Inject constructor(
                             model = "a",
                             osVersion = "a",
                         ))
+                        stopObservingMessages()
                     }
                     "error" -> {
                         Log.d("DeviceViewModel", "Error: ${response["message"]}")
@@ -99,10 +103,11 @@ class DeviceViewModel @Inject constructor(
 
                 try {
                     Log.i("RegistrationVM", "Creating registration data")
-                    registrationPrefs.saveRegistrationDetails(deviceId) // <<< Clears SharedPreferences
+                    registrationPrefs.saveRegistrationDetails(deviceId) // <<<
+                    // Clears SharedPreferences
 
                     Log.i("RegistrationVM", "Starting WebSocket heartbeat...")
-                    //webSocketService.startHeartbeat(deviceId)// <<< Stops WebSocket pings
+                    webSocketService.startHeartbeat(deviceId)// <<< Stops WebSocket pings
 
                      // <<< Disconnects WebSocket
 
@@ -115,6 +120,11 @@ class DeviceViewModel @Inject constructor(
                 _deviceState.value = DeviceState.Error("Error: ${e.localizedMessage}")
             }
         }
+    }
+
+    fun stopObservingMessages() {
+        messageObservationJob?.cancel()
+        messageObservationJob = null
     }
 }
 sealed class DeviceState {
