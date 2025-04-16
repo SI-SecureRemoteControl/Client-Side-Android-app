@@ -85,9 +85,9 @@ class MainViewModel @Inject constructor(
             }
 
             val from = Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID)
-
             try {
                 webSocketService.sendFinalConformation(from, token, decision)
+                _sessionState.value= SessionState.Connected
             } catch (e: Exception) {
                 _sessionState.value = SessionState.Error("Failed to send confirmation: ${e.localizedMessage}")
             }
@@ -122,6 +122,7 @@ class MainViewModel @Inject constructor(
 
     fun resetSessionState() {
         _sessionState.value = SessionState.Idle
+        timeoutJob?.cancel()
     }
 
     fun stopObservingMessages() {
@@ -137,5 +138,6 @@ sealed class SessionState {
     object Waiting : SessionState()
     object Accepted : SessionState()
     object Rejected : SessionState()
+    object Connected : SessionState()
     data class Error(val message: String) : SessionState()
 }

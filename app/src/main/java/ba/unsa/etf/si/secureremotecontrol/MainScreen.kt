@@ -69,7 +69,6 @@ fun MainScreen(
         else -> {}
     }
 
-
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -98,14 +97,33 @@ fun MainScreen(
 
         Spacer(modifier = Modifier.height(64.dp))
 
-        Button(
-            onClick = {
-                buttonEnabled = false
-                viewModel.requestSession()
-            },
-            enabled = buttonEnabled
-        ) {
-            Text("Request Session")
+        if (sessionState is SessionState.Connected) {
+            Text("Connected", style = MaterialTheme.typography.bodyLarge)
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Button(onClick = { viewModel.resetSessionState() }) {
+                Text("Disconnect")
+            }
+        } else {
+            Button(
+                onClick = {
+                    buttonEnabled = false
+                    viewModel.requestSession()
+                },
+                enabled = buttonEnabled
+            ) {
+                Text("Request Session")
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Button(
+                onClick = { viewModel.stopObservingMessages(); onDeregister() },
+                enabled = buttonEnabled
+            ) {
+                Text("Deregister Device")
+            }
         }
 
         Spacer(modifier = Modifier.height(8.dp))
@@ -129,11 +147,6 @@ fun MainScreen(
                 viewModel.resetSessionState()
             }
             else -> {}
-        }
-
-
-        Button(onClick = { viewModel.stopObservingMessages(); onDeregister() }, enabled = buttonEnabled) {
-            Text("Deregister Device")
         }
     }
 }
