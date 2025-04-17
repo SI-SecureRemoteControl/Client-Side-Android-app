@@ -3,44 +3,70 @@ package ba.unsa.etf.si.secureremotecontrol
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.layout.*
-import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
+import androidx.navigation.compose.rememberNavController
+import ba.unsa.etf.si.secureremotecontrol.data.datastore.TokenDataStore
+import ba.unsa.etf.si.secureremotecontrol.presentation.verification.DeregistrationScreen
 import ba.unsa.etf.si.secureremotecontrol.ui.theme.SecureRemoteControlTheme
 import dagger.hilt.android.AndroidEntryPoint
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
+import javax.inject.Inject
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
+    @Inject
+    lateinit var tokenDataStore: TokenDataStore
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
             SecureRemoteControlTheme {
-                Surface(
-                    modifier = Modifier.fillMaxSize(),
-                    color = MaterialTheme.colorScheme.background
+                val navController = rememberNavController()
+
+                NavHost(
+                    navController = navController,
+                    startDestination = determineStartDestination()
                 ) {
-                    MainScreen()
+                    composable("registration") {
+                        RegisterScreen(
+                            onRegistrationSuccess = {
+                                navController.navigate("main") {
+                                    popUpTo("registration") { inclusive = true }
+                                }
+                            }
+                        )
+                    }
+
+                    composable("main") {
+                        MainScreen(
+                            onDeregister = {
+                                navController.navigate("deregister")
+                            }
+                        )
+                    }
+
+                    composable("deregister") {
+                        DeregistrationScreen(
+                            navController = navController,
+                            onDeregisterSuccess = {
+                                navController.navigate("registration") {
+                                    popUpTo("deregister") { inclusive = true }
+                                }
+                            }
+                        )
+                    }
                 }
             }
         }
     }
-}
 
-@Composable
-fun MainScreen() {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
-    ) {
-        Text(
-            text = "Welcome to Secure Remote Control",
-            style = MaterialTheme.typography.headlineMedium
-        )
+    private fun determineStartDestination(): String {
+        return runBlocking {
+            val token = tokenDataStore.token.first()
+            if (token.isNullOrEmpty()) "registration" else "main"
+        }
     }
 }
