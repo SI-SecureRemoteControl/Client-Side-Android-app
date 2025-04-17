@@ -102,7 +102,7 @@ fun MainScreen(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            Button(onClick = { viewModel.resetSessionState() }) {
+            Button(onClick = { viewModel.disconnectSession() }) {
                 Text("Disconnect")
             }
         } else {
@@ -129,6 +129,9 @@ fun MainScreen(
         Spacer(modifier = Modifier.height(8.dp))
 
         when (sessionState) {
+            is SessionState.Idle -> {
+                buttonEnabled = true
+            }
             is SessionState.Requesting -> Text("Requesting session...")
             is SessionState.Timeout -> {
                 Text("Session request timed out.")
