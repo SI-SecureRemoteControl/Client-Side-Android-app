@@ -106,6 +106,9 @@ dependencies {
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
+
+    //Datastore
+    implementation("androidx.datastore:datastore-preferences:1.0.0")
 }
 
 apply(plugin = "com.google.gms.google-services")

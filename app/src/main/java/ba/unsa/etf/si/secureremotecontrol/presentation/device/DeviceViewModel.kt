@@ -19,18 +19,23 @@ import kotlinx.coroutines.launch
 import java.util.*
 import javax.inject.Inject
 import android.util.Log
+import ba.unsa.etf.si.secureremotecontrol.data.datastore.TokenDataStore
 import ba.unsa.etf.si.secureremotecontrol.data.util.RegistrationPreferences
+import kotlinx.coroutines.Job
 
 @HiltViewModel
 class DeviceViewModel @Inject constructor(
     private val webSocketService: WebSocketService,
     @ApplicationContext private val context: Context,
     private val registrationPrefs: RegistrationPreferences,
-    private val gson: Gson
+    private val gson: Gson,
+    private val tokenDataStore: TokenDataStore
 ) : ViewModel() {
 
     private val _deviceState = MutableStateFlow<DeviceState>(DeviceState.Initial)
     val deviceState: StateFlow<DeviceState> = _deviceState
+
+    private var messageObservationJob: Job? = null
 
     init {
         connectAndObserveMessages()
@@ -49,19 +54,25 @@ class DeviceViewModel @Inject constructor(
     }
 
     private fun observeMessages() {
-        viewModelScope.launch {
+        messageObservationJob = viewModelScope.launch {
             webSocketService.observeMessages().collect { message ->
                 Log.d("DeviceViewModel", "Message received: $message")
                 val response = gson.fromJson(message, Map::class.java)
                 when (response["type"]) {
                     "success" -> {
-                        Log.d("DeviceViewModel", "Device registered successfully")
+                        Log.d("DeviceViewModel", "Success: ${response["message"]}")
+                        val token = response["token"] as String
+                        Log.d("DeviceViewModel", "Token: $token")
+                        viewModelScope.launch {
+                            tokenDataStore.saveToken(token)
+                        }
                         _deviceState.value = DeviceState.Registered(Device(
                             deviceId = "a",
                             registrationKey = "a",
                             model = "a",
                             osVersion = "a",
                         ))
+                        stopObservingMessages()
                     }
                     "error" -> {
                         Log.d("DeviceViewModel", "Error: ${response["message"]}")
@@ -87,17 +98,17 @@ class DeviceViewModel @Inject constructor(
                     model = model,
                     osVersion = osVersion
                 )
-
+                Log.d("DeviceViewModel", "Device ID: $deviceId")
                 webSocketService.sendRegistration(device)
 
                 try {
                     Log.i("RegistrationVM", "Creating registration data")
-                    registrationPrefs.saveRegistrationDetails(deviceId) // <<< Clears SharedPreferences
+                    registrationPrefs.saveRegistrationDetails(deviceId) // <<<
+                    // Clears SharedPreferences
 
                     Log.i("RegistrationVM", "Starting WebSocket heartbeat...")
                     webSocketService.startHeartbeat(deviceId)// <<< Stops WebSocket pings
 
-                    Log.i("DeregistrationVM", "Disconnecting WebSocket...")
                      // <<< Disconnects WebSocket
 
                 } catch (cleanupException: Exception) {
@@ -109,6 +120,11 @@ class DeviceViewModel @Inject constructor(
                 _deviceState.value = DeviceState.Error("Error: ${e.localizedMessage}")
             }
         }
+    }
+
+    fun stopObservingMessages() {
+        messageObservationJob?.cancel()
+        messageObservationJob = null
     }
 }
 sealed class DeviceState {
