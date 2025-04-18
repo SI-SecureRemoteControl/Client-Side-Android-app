@@ -13,7 +13,11 @@ import ba.unsa.etf.si.secureremotecontrol.ui.theme.SecureRemoteControlTheme
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import ba.unsa.etf.si.secureremotecontrol.presentation.main.MainViewModel
 import javax.inject.Inject
+import androidx.hilt.navigation.compose.hiltViewModel
+
+
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
@@ -70,3 +74,4 @@ class MainActivity : ComponentActivity() {
         }
     }
 }
+

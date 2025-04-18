@@ -66,6 +66,9 @@ fun MainScreen(
                 )
             }
         }
+        is SessionState.Streaming -> {
+            Text("Streaming in progress...", style = MaterialTheme.typography.bodyLarge)
+        }
         else -> {}
     }
 
@@ -145,6 +148,9 @@ fun MainScreen(
                 Toast.makeText(context, errorMessage, Toast.LENGTH_LONG).show()
                 buttonEnabled = true
                 viewModel.resetSessionState()
+            }
+            is SessionState.Streaming -> {
+                Text("Streaming in progress...")
             }
             else -> {}
         }

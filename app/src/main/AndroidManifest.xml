@@ -16,8 +16,9 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.INTERNET" />
-
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     <application
+        android:usesCleartextTraffic="true"
         android:name=".RemoteControlApplication"
         android:allowBackup="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
@@ -29,6 +30,7 @@
         android:theme="@style/Theme.SecureRemoteControl"
         tools:targetApi="31">
         <activity
+
             android:name=".MainActivity"
             android:exported="true"
             android:label="@string/app_name"
@@ -44,6 +46,11 @@
             android:name=".service.RemoteControlService"
             android:enabled="true"
             android:exported="false" />
+
+        <service
+            android:name=".service.ScreenSharingService"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection" />
 
 
 

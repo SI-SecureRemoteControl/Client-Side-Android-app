@@ -13,4 +13,15 @@ interface WebSocketService {
     fun disconnect()
     fun startHeartbeat(deviceId: String)
     fun stopHeartbeat()
+
+    // New methods for WebRTC
+    fun sendRawMessage(message: String)
+    fun observeRtcMessages(): Flow<RtcMessage>
 }
+
+data class RtcMessage(
+    val type: String,
+    val fromId: String,
+    val toId: String,
+    val payload: Any
+)

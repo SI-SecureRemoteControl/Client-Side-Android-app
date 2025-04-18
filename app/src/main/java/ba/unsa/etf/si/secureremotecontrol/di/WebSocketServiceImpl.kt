@@ -1,6 +1,7 @@
 package ba.unsa.etf.si.secureremotecontrol.data.websocket
 
 import android.util.Log
+import ba.unsa.etf.si.secureremotecontrol.data.api.RtcMessage
 import ba.unsa.etf.si.secureremotecontrol.data.api.WebSocketService
 import ba.unsa.etf.si.secureremotecontrol.data.models.Device
 import com.google.gson.Gson
@@ -8,6 +9,7 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.map
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -16,7 +18,7 @@ import okhttp3.WebSocketListener
 import org.json.JSONObject
 import javax.inject.Inject
 import javax.inject.Singleton
-
+import kotlinx.coroutines.flow.filterNotNull
 @Singleton
 class WebSocketServiceImpl @Inject constructor(
     private val client: OkHttpClient,
@@ -40,7 +42,7 @@ class WebSocketServiceImpl @Inject constructor(
             return webSocket!!
         }
 
-        val request = Request.Builder().url("wss://remote-control-gateway.onrender.com/").build()
+        val request = Request.Builder().url("ws://192.168.1.10:8080/").build()
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 isConnected = true
@@ -68,7 +70,7 @@ class WebSocketServiceImpl @Inject constructor(
         }
 
         webSocket = client.newWebSocket(
-            Request.Builder().url("wss://remote-control-gateway.onrender.com/").build(),
+            Request.Builder().url("ws://192.168.1.10:8080/").build(),
             listener
         )
 
@@ -76,6 +78,23 @@ class WebSocketServiceImpl @Inject constructor(
             webSocket?.close(1000, "Flow closed")
         }
     }
+
+    override fun observeRtcMessages(): Flow<RtcMessage> = observeMessages()
+        .map { message ->
+            try {
+                val jsonObject = JSONObject(message)
+                val type = jsonObject.getString("type")
+                val fromId = jsonObject.optString("fromId", "")
+                val toId = jsonObject.optString("toId", "")
+                val payload = jsonObject.getJSONObject("payload")
+
+                RtcMessage(type, fromId, toId, payload)
+            } catch (e: Exception) {
+                Log.e("WebSocketService", "Error parsing RTC message", e)
+                null
+            }
+        }
+        .filterNotNull() // Filter out null values
 
     override fun sendRegistration(device: Device) {
         val message = gson.toJson(mapOf(
@@ -106,6 +125,14 @@ class WebSocketServiceImpl @Inject constructor(
         isConnected = false
     }
 
+    override fun sendRawMessage(message: String) {
+        if (!isConnected) {
+            Log.e("WebSocketService", "Cannot send message: WebSocket is not connected.")
+            connectWebSocket()
+        }
+        webSocket?.send(message)
+    }
+
     fun sendDeregistration(device: Device) {
         val message = gson.toJson(mapOf(
             "type" to "deregister",
@@ -115,7 +142,7 @@ class WebSocketServiceImpl @Inject constructor(
         stopHeartbeat()
     }
 
-     override fun startHeartbeat(deviceId: String) {
+    override fun startHeartbeat(deviceId: String) {
         heartbeatJob?.cancel()
         heartbeatJob = clientScope.launch {
             delay(500)
@@ -126,7 +153,7 @@ class WebSocketServiceImpl @Inject constructor(
         }
     }
 
-     override fun stopHeartbeat() {
+    override fun stopHeartbeat() {
         heartbeatJob?.cancel()
         heartbeatJob = null
     }
@@ -195,7 +222,7 @@ class WebSocketServiceImpl @Inject constructor(
         override fun onFailure(webSocket: WebSocket, t: Throwable, response: okhttp3.Response?) {
             Log.e("WebSocket", "Connection failed", t)
             stopHeartbeat()
-            retryConnection("wss://remote-control-gateway.onrender.com/", "deviceId") // Replace with actual URL and device ID
+            retryConnection("ws://192.168.1.10:8080/", "deviceId") // Replace with actual URL and device ID
         }
     }
 }
