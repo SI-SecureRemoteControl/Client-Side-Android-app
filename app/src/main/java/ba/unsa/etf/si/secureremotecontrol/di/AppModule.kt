@@ -1,6 +1,6 @@
 package ba.unsa.etf.si.secureremotecontrol.di
 
-import ba.unsa.etf.si.secureremotecontrol.data.api.ApiService
+import ba.unsa.etf.si.secureremotecontrol.data.network.ApiService
 import ba.unsa.etf.si.secureremotecontrol.data.api.WebSocketService
 import ba.unsa.etf.si.secureremotecontrol.data.websocket.WebSocketServiceImpl
 import com.google.gson.Gson
@@ -38,7 +38,7 @@ object AppModule {
     @Singleton
     fun provideRetrofit(client: OkHttpClient, gson: Gson): Retrofit {
         return Retrofit.Builder()
-            .baseUrl("https://your-api-base-url.com/") // Replace with your actual API base URL
+            .baseUrl("https://remote-control-gateway-production.up.railway.app/")
             .client(client)
             .addConverterFactory(GsonConverterFactory.create(gson))
             .build()

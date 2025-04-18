@@ -7,6 +7,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import ba.unsa.etf.si.secureremotecontrol.data.api.WebSocketService
 import ba.unsa.etf.si.secureremotecontrol.data.datastore.TokenDataStore
+import ba.unsa.etf.si.secureremotecontrol.data.network.ApiService
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Job
@@ -21,6 +22,7 @@ import javax.inject.Inject
 @HiltViewModel
 class MainViewModel @Inject constructor(
     private val webSocketService: WebSocketService,
+    private val apiService: ApiService,
     @ApplicationContext private val context: Context,
     private val tokenDataStore: TokenDataStore
 ) : ViewModel() {
@@ -87,9 +89,37 @@ class MainViewModel @Inject constructor(
             val from = Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID)
             try {
                 webSocketService.sendFinalConformation(from, token, decision)
-                _sessionState.value= SessionState.Connected
+                _sessionState.value = if(decision) SessionState.Connected else SessionState.Idle
             } catch (e: Exception) {
                 _sessionState.value = SessionState.Error("Failed to send confirmation: ${e.localizedMessage}")
+            }
+        }
+    }
+
+    fun disconnectSession() {
+        viewModelScope.launch {
+            val token = tokenDataStore.token.firstOrNull()
+            if (token.isNullOrEmpty()) {
+                _sessionState.value = SessionState.Error("Token not found")
+                return@launch
+            }
+
+            val deviceId = Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID)
+
+            try {
+                val response = apiService.removeSession(
+                    mapOf("token" to token, "deviceId" to deviceId)
+                )
+
+                if (response.code() == 200) {
+                    resetSessionState()
+                } else {
+                    val errorMessage = response.body()?.get("message") as? String
+                        ?: "Failed to disconnect session"
+                    _sessionState.value = SessionState.Error(errorMessage)
+                }
+            } catch (e: Exception) {
+                _sessionState.value = SessionState.Error("Error: ${e.localizedMessage}")
             }
         }
     }
@@ -111,9 +141,6 @@ class MainViewModel @Inject constructor(
                     }
                     "rejected" -> {
                         _sessionState.value = SessionState.Rejected
-                    }
-                    else -> {
-                        _sessionState.value = SessionState.Idle
                     }
                 }
             }

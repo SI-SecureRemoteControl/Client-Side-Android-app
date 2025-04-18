@@ -40,7 +40,7 @@ class WebSocketServiceImpl @Inject constructor(
             return webSocket!!
         }
 
-        val request = Request.Builder().url("wss://remote-control-gateway.onrender.com/").build()
+        val request = Request.Builder().url("wss://remote-control-gateway-production.up.railway.app/").build()
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 isConnected = true
@@ -68,7 +68,7 @@ class WebSocketServiceImpl @Inject constructor(
         }
 
         webSocket = client.newWebSocket(
-            Request.Builder().url("wss://remote-control-gateway.onrender.com/").build(),
+            Request.Builder().url("wss://remote-control-gateway-production.up.railway.app/").build(),
             listener
         )
 
@@ -96,6 +96,7 @@ class WebSocketServiceImpl @Inject constructor(
             "token" to token,
             "decision" to if (decision) "accepted" else "rejected"
         ))
+        Log.d("WebSocket", "Final confirmation sent: $message")
         webSocket?.send(message)
     }
 
@@ -195,7 +196,7 @@ class WebSocketServiceImpl @Inject constructor(
         override fun onFailure(webSocket: WebSocket, t: Throwable, response: okhttp3.Response?) {
             Log.e("WebSocket", "Connection failed", t)
             stopHeartbeat()
-            retryConnection("wss://remote-control-gateway.onrender.com/", "deviceId") // Replace with actual URL and device ID
+            retryConnection("wss://remote-control-gateway-production.up.railway.app/", "deviceId") // Replace with actual URL and device ID
         }
     }
 }
