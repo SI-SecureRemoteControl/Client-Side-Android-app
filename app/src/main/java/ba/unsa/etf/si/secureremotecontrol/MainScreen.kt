@@ -23,11 +23,13 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import ba.unsa.etf.si.secureremotecontrol.presentation.main.MainViewModel
 import ba.unsa.etf.si.secureremotecontrol.presentation.main.SessionState
-
+import android.provider.Settings
+import android.content.Intent
 @Composable
 fun MainScreen(
     viewModel: MainViewModel = hiltViewModel(),
-    onDeregister: () -> Unit
+    onDeregister: () -> Unit,
+    onStartScreenCapture: (callback: (resultCode: Int, data: Intent) -> Unit) -> Unit
 ) {
     val sessionState by viewModel.sessionState.collectAsState()
     var buttonEnabled by remember { mutableStateOf(true) }
@@ -51,6 +53,13 @@ fun MainScreen(
                         Button(onClick = {
                             showDialog = false
                             viewModel.sendSessionFinalConfirmation(true) // User accepted
+                            onStartScreenCapture { resultCode, data ->
+                                val fromId = Settings.Secure.getString(
+                                    context.contentResolver,
+                                    Settings.Secure.ANDROID_ID
+                                )
+                                viewModel.startStreaming(resultCode, data, fromId)
+                            }
                         }) {
                             Text("Yes")
                         }
@@ -59,6 +68,7 @@ fun MainScreen(
                         Button(onClick = {
                             showDialog = false
                             viewModel.sendSessionFinalConfirmation(false) // User rejected
+
                         }) {
                             Text("No")
                         }

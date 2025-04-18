@@ -16,6 +16,9 @@ import okhttp3.WebSocketListener
 import org.json.JSONObject
 import javax.inject.Inject
 import javax.inject.Singleton
+import ba.unsa.etf.si.secureremotecontrol.data.api.RtcMessage
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.map
 
 @Singleton
 class WebSocketServiceImpl @Inject constructor(
@@ -76,7 +79,13 @@ class WebSocketServiceImpl @Inject constructor(
             webSocket?.close(1000, "Flow closed")
         }
     }
-
+    override fun sendRawMessage(message: String) {
+        if (!isConnected) {
+            Log.e("WebSocketService", "Cannot send message: WebSocket is not connected.")
+            connectWebSocket()
+        }
+        webSocket?.send(message)
+    }
     override fun sendRegistration(device: Device) {
         val message = gson.toJson(mapOf(
             "type" to "register",
@@ -145,6 +154,22 @@ class WebSocketServiceImpl @Inject constructor(
         webSocket?.send(message)
         Log.d("WebSocket", "Session request sent from $from")
     }
+    override fun observeRtcMessages(): Flow<RtcMessage> = observeMessages()
+        .map { message ->
+            try {
+                val jsonObject = JSONObject(message)
+                val type = jsonObject.getString("type")
+                val fromId = jsonObject.optString("fromId", "")
+                val toId = jsonObject.optString("toId", "")
+                val payload = jsonObject.getJSONObject("payload")
+
+                RtcMessage(type, fromId, toId, payload)
+            } catch (e: Exception) {
+                Log.e("WebSocketService", "Error parsing RTC message", e)
+                null
+            }
+        }
+        .filterNotNull() // Filter out null values
 
     private fun sendStatusHeartbeatMessage(deviceId: String) {
         val statusMsg = JSONObject().apply {

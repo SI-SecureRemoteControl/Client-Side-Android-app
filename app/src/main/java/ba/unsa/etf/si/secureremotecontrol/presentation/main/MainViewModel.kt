@@ -18,13 +18,16 @@ import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 import javax.inject.Inject
-
+import ba.unsa.etf.si.secureremotecontrol.data.webrtc.WebRTCManager
+import android.content.Intent
+import ba.unsa.etf.si.secureremotecontrol.service.ScreenSharingService
 @HiltViewModel
 class MainViewModel @Inject constructor(
     private val webSocketService: WebSocketService,
     private val apiService: ApiService,
     @ApplicationContext private val context: Context,
-    private val tokenDataStore: TokenDataStore
+    private val tokenDataStore: TokenDataStore,
+    private val webRTCManager: WebRTCManager
 ) : ViewModel() {
 
     private val _sessionState = MutableStateFlow<SessionState>(SessionState.Idle)
@@ -96,6 +99,7 @@ class MainViewModel @Inject constructor(
         }
     }
 
+
     fun disconnectSession() {
         viewModelScope.launch {
             val token = tokenDataStore.token.firstOrNull()
@@ -146,6 +150,18 @@ class MainViewModel @Inject constructor(
             }
         }
     }
+    fun startStreaming(resultCode: Int, data: Intent, fromId: String) {
+        viewModelScope.launch {
+            try {
+                //webRTCManager.startScreenCapture(resultCode, data, fromId)
+                val intent = ScreenSharingService.getStartIntent(context, resultCode, data, fromId)
+                context.startForegroundService(intent)
+                _sessionState.value = SessionState.Streaming
+            } catch (e: Exception) {
+                _sessionState.value = SessionState.Error("Failed to start streaming: ${e.localizedMessage}")
+            }
+        }
+    }
 
     fun resetSessionState() {
         _sessionState.value = SessionState.Idle
@@ -167,4 +183,5 @@ sealed class SessionState {
     object Rejected : SessionState()
     object Connected : SessionState()
     data class Error(val message: String) : SessionState()
+    object Streaming : SessionState()
 }
