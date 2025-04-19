@@ -11,7 +11,7 @@ object RetrofitClient {
     // !!! *** UNESITE IP ADRESU VAŠEG RAČUNARA OVDJE *** !!!
     // Nemojte koristiti 'localhost' ili '127.0.0.1' sa emulatora/uređaja
     // Primjer: "http://192.168.1.10:3000/" (provjerite port iz server.js)
-    private const val BASE_URL =  "https://remote-control-gateway.onrender.com"
+    private const val BASE_URL =  "https://remote-control-gateway-production.up.railway.app/"
 
     // Logger za mrežne zahtjeve (korisno za debug)
     private val loggingInterceptor = HttpLoggingInterceptor().apply {

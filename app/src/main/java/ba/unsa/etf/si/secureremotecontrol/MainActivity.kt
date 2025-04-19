@@ -4,12 +4,15 @@ import android.app.Activity
 import android.content.Intent
 import android.media.projection.MediaProjectionManager
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import ba.unsa.etf.si.secureremotecontrol.data.datastore.TokenDataStore
+import ba.unsa.etf.si.secureremotecontrol.presentation.main.MainViewModel
 import ba.unsa.etf.si.secureremotecontrol.presentation.verification.DeregistrationScreen
 import ba.unsa.etf.si.secureremotecontrol.ui.theme.SecureRemoteControlTheme
 import dagger.hilt.android.AndroidEntryPoint
@@ -30,6 +33,10 @@ class MainActivity : ComponentActivity() {
         setContent {
             SecureRemoteControlTheme {
                 val navController = rememberNavController()
+                val viewModel: MainViewModel = hiltViewModel()
+
+                // Start observing RTC messages
+                viewModel.startObservingRtcMessages(this)
 
                 NavHost(
                     navController = navController,
@@ -87,8 +94,16 @@ class MainActivity : ComponentActivity() {
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+
         if (requestCode == SCREEN_CAPTURE_REQUEST_CODE && resultCode == Activity.RESULT_OK && data != null) {
             onScreenCaptureResult?.invoke(resultCode, data)
+
+            onScreenCaptureResult = null
+            Log.d("MainActivity", "Screen capture started successfully.")
+
+        } else {
+            Log.e("MainActivity", "Screen capture permission denied or invalid data.")
         }
     }
+
 }

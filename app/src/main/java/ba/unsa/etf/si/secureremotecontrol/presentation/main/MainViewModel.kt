@@ -20,6 +20,7 @@ import org.json.JSONObject
 import javax.inject.Inject
 import ba.unsa.etf.si.secureremotecontrol.data.webrtc.WebRTCManager
 import android.content.Intent
+import androidx.lifecycle.LifecycleOwner
 import ba.unsa.etf.si.secureremotecontrol.service.ScreenSharingService
 @HiltViewModel
 class MainViewModel @Inject constructor(
@@ -146,6 +147,12 @@ class MainViewModel @Inject constructor(
                     "rejected" -> {
                         _sessionState.value = SessionState.Rejected
                     }
+                    "offer" -> { // Handle incoming SDP offer
+                        val payload = response.getJSONObject("payload")
+                        val sdp = payload.getString("sdp")
+                        val fromId = response.getString("fromId")
+                        webRTCManager.confirmSessionAndStartStreaming(fromId, sdp)
+                    }
                 }
             }
         }
@@ -160,6 +167,12 @@ class MainViewModel @Inject constructor(
             } catch (e: Exception) {
                 _sessionState.value = SessionState.Error("Failed to start streaming: ${e.localizedMessage}")
             }
+        }
+    }
+
+    fun startObservingRtcMessages(lifecycleOwner: LifecycleOwner) {
+        viewModelScope.launch {
+            webRTCManager.startObservingRtcMessages(lifecycleOwner)
         }
     }
 

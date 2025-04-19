@@ -24,6 +24,10 @@ class WebRTCManager @Inject constructor(
     private val coroutineScope = CoroutineScope(Dispatchers.IO)
 
     fun startScreenCapture(resultCode: Int, data: Intent, fromId: String) {
+        if (data == null) {
+            Log.e(TAG, "Invalid resultData. Cannot start screen capture.")
+            return
+        }
         webRTCService.startScreenCapture(resultCode, data, fromId)
     }
 

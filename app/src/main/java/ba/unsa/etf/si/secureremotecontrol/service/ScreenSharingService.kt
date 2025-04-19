@@ -7,6 +7,8 @@ import android.app.NotificationManager
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.media.projection.MediaProjection
+import android.media.projection.MediaProjectionManager
 import android.os.Binder
 import android.os.IBinder
 import android.util.Log
@@ -29,6 +31,11 @@ class ScreenSharingService : Service() {
     private var isSharing = false
     private var remoteUserId: String? = null
 
+    // Keep track of the MediaProjection to prevent reuse
+    private var mediaProjection: MediaProjection? = null
+    private var resultCode: Int = 0
+    private var resultData: Intent? = null
+
     inner class LocalBinder : Binder() {
         fun getService(): ScreenSharingService = this@ScreenSharingService
     }
@@ -43,15 +50,28 @@ class ScreenSharingService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        Log.d(TAG, "onStartCommand called with action: ${intent?.action}")
+
         when (intent?.action) {
             ACTION_START_SCREEN_SHARING -> {
-                val resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, 0)
-                val data = intent.getParcelableExtra<Intent>(EXTRA_DATA)
+                val newResultCode = intent.getIntExtra(EXTRA_RESULT_CODE, 0)
+                val newData = intent.getParcelableExtra<Intent>(EXTRA_DATA)
                 val fromId = intent.getStringExtra(EXTRA_FROM_ID) ?: ""
 
-                if (data != null) {
+                if (newData != null) {
+                    // Handle the case where we already have an active sharing session
+                    if (isSharing) {
+                        Log.d(TAG, "Screen sharing is already in progress. Stopping existing session.")
+                    }
+                    stopScreenSharing()
+                    // Start new session with fresh token
                     startForeground(NOTIFICATION_ID, createNotification())
-                    startScreenSharing(resultCode, data, fromId)
+                    resultCode = newResultCode
+                    resultData = newData
+                    startScreenSharing(newResultCode, newData, fromId)
+                } else {
+                    Log.e(TAG, "Intent data is null, cannot start screen sharing")
+                    stopSelf()
                 }
             }
             ACTION_STOP_SCREEN_SHARING -> {
@@ -60,9 +80,10 @@ class ScreenSharingService : Service() {
                 stopSelf()
             }
         }
+
         return START_NOT_STICKY
     }
-/*
+
     private fun startScreenSharing(resultCode: Int, data: Intent, fromId: String) {
         if (resultCode != Activity.RESULT_OK || data == null) {
             Log.e(TAG, "Invalid resultCode or data. Cannot start screen sharing.")
@@ -71,40 +92,37 @@ class ScreenSharingService : Service() {
         }
 
         remoteUserId = fromId
+
         try {
+            // Get a new MediaProjection instance
+            val mediaProjectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+            mediaProjection = mediaProjectionManager.getMediaProjection(resultCode, data)
+
+            if (mediaProjection == null) {
+                Log.e(TAG, "Failed to get MediaProjection instance")
+                stopSelf()
+                return
+            }
+
+            // Pass the fresh MediaProjection to WebRTCManager
             webRTCManager.startScreenCapture(resultCode, data, fromId)
             isSharing = true
             Log.d(TAG, "Screen sharing started with user: $fromId")
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to start screen sharing: ${e.localizedMessage}")
+            Log.e(TAG, "Failed to start screen sharing: ${e.message}", e)
             stopSelf()
         }
     }
-*/
-private fun startScreenSharing(resultCode: Int, data: Intent, fromId: String) {
-    // Hardcode resultCode to Activity.RESULT_OK
-    val hardcodedResultCode = Activity.RESULT_OK
-
-    if (hardcodedResultCode != Activity.RESULT_OK || data == null) {
-        Log.e(TAG, "Invalid resultCode or data. Cannot start screen sharing.")
-        stopSelf()
-        return
-    }
-
-    remoteUserId = fromId
-    try {
-        webRTCManager.startScreenCapture(hardcodedResultCode, data, fromId)
-        isSharing = true
-        Log.d(TAG, "Screen sharing started with user: $fromId")
-    } catch (e: Exception) {
-        Log.e(TAG, "Failed to start screen sharing: ${e.localizedMessage}")
-        stopSelf()
-    }
-}
 
     fun stopScreenSharing() {
         if (isSharing) {
             webRTCManager.stopScreenCapture()
+
+            // Release the MediaProjection to prevent token reuse
+            mediaProjection?.stop()
+            mediaProjection = null
+            resultData = null
+
             isSharing = false
             Log.d(TAG, "Screen sharing stopped")
         }

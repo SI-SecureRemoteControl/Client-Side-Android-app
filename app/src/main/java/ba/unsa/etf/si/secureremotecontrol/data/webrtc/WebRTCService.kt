@@ -22,7 +22,7 @@ class WebRTCService @Inject constructor(
     private val webSocketService: WebSocketService
 ) {
     private val TAG = "WebRTCService"
-
+    private var resultCode: Int? = null
     private val rootEglBase: EglBase = EglBase.create()
     private var peerConnectionFactory: PeerConnectionFactory? = null
     private var peerConnection: PeerConnection? = null
@@ -63,8 +63,15 @@ class WebRTCService @Inject constructor(
             .setVideoDecoderFactory(decoderFactory)
             .createPeerConnectionFactory()
     }
+    private var isCapturing = false
 
     fun startScreenCapture(resultCode: Int, data: Intent, fromId: String) {
+        if (isCapturing) {
+            Log.w(TAG, "Screen capture already in progress. Ignoring duplicate request.")
+
+        }
+        stopScreenCapture()
+        this.resultCode = resultCode
         val mediaProjectionManager = context.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
         mediaProjection = mediaProjectionManager.getMediaProjection(resultCode, data)
 
@@ -72,7 +79,7 @@ class WebRTCService @Inject constructor(
             Log.e(TAG, "MediaProjection is null. Screen capture cannot start.")
             throw IllegalStateException("MediaProjection is null. Ensure valid resultCode and data are passed.")
         }
-
+        isCapturing = true
         surfaceTextureHelper = SurfaceTextureHelper.create("CaptureThread", rootEglBase.eglBaseContext)
         videoSource = peerConnectionFactory?.createVideoSource(false)
 
@@ -86,12 +93,19 @@ class WebRTCService @Inject constructor(
         screenCapturer?.startCapture(displayMetrics.widthPixels / 2, displayMetrics.heightPixels / 2, fps)
 
         localVideoTrack = peerConnectionFactory?.createVideoTrack("video0", videoSource)
+        Log.d(TAG, "startScreenCapture called with resultCode: $resultCode, fromId: $fromId")
 
         createPeerConnection(fromId)
     }
 
     private fun createScreenCapturer(data: Intent): VideoCapturer {
-        return ScreenCapturerAndroid(data, null)
+        return ScreenCapturerAndroid(data, object : MediaProjection.Callback() {
+            override fun onStop() {
+                super.onStop()
+                Log.d(TAG, "MediaProjection stopped. Stopping screen capture.")
+                stopScreenCapture()
+            }
+        })
     }
 
     private fun createPeerConnection(fromId: String) {
@@ -106,6 +120,10 @@ class WebRTCService @Inject constructor(
 
             override fun onIceConnectionChange(iceConnectionState: PeerConnection.IceConnectionState) {
                 Log.d(TAG, "onIceConnectionChange: $iceConnectionState")
+                if (iceConnectionState == PeerConnection.IceConnectionState.FAILED ||
+                    iceConnectionState == PeerConnection.IceConnectionState.DISCONNECTED) {
+                    Log.e(TAG, "Peer connection failed or disconnected.")
+                }
             }
 
             override fun onIceGatheringChange(iceGatheringState: PeerConnection.IceGatheringState) {
@@ -180,7 +198,9 @@ class WebRTCService @Inject constructor(
             }
 
             override fun onCreateSuccess(p0: SessionDescription?) {}
-            override fun onCreateFailure(p0: String?) {}
+            override fun onCreateFailure(error: String) {
+                Log.e(TAG, "Answer creation failed: $error")
+            }
         }, sessionDescription)
     }
 
@@ -229,17 +249,47 @@ class WebRTCService @Inject constructor(
         }
     }
 
+    /*fun stopScreenCapture() {
+        try {
+            screenCapturer?.let {
+                it.stopCapture()
+                screenCapturer = null
+            } ?: Log.w(TAG, "ScreenCapturer is already null. Nothing to stop.")
+            //Log.w(TAG,"I am here and nothing happended")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error stopping screen capture", e)
+        }
+    }*/
     fun stopScreenCapture() {
         try {
-            screenCapturer?.stopCapture()
-            screenCapturer = null
+            if (!isCapturing) return
+
+            screenCapturer?.let {
+                it.stopCapture()
+                screenCapturer = null
+            }
+
+            mediaProjection?.stop()
+            mediaProjection = null
+
+            surfaceTextureHelper?.dispose()
+            surfaceTextureHelper = null
+
+            isCapturing = false
+
+            resultCode = null
+
+            Log.d(TAG, "Screen capture stopped.")
         } catch (e: Exception) {
             Log.e(TAG, "Error stopping screen capture", e)
         }
     }
 
+
+
     fun release() {
         try {
+
             stopScreenCapture()
             peerConnection?.dispose()
             peerConnection = null
