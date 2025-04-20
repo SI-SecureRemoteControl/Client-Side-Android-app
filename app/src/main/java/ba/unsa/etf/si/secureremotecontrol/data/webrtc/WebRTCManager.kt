@@ -50,9 +50,11 @@ class WebRTCManager @Inject constructor(
     }
 
     fun confirmSessionAndStartStreaming(fromId: String, sdpOffer: String) {
-        webRTCService.createPeerConnection(fromId)
+       /* webRTCService.createPeerConnection(fromId)
         webRTCService.handleRemoteSessionDescription("offer", sdpOffer, fromId)
-        webRTCService.createAndSendAnswer(fromId)
+        webRTCService.createAndSendAnswer(fromId)*/
+        Log.d(TAG, "[confirmSessionAndStartStreaming] Handling remote offer from $fromId")
+        webRTCService.handleRemoteSessionDescription("offer", sdpOffer, fromId)
     }
 
     fun getScreenCaptureIntent(activity: Activity): Intent {
