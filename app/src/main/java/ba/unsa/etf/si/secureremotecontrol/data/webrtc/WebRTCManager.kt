@@ -29,6 +29,7 @@ class WebRTCManager @Inject constructor(
             Log.e(TAG, "Invalid resultData. Cannot start screen capture.")
             return
         }
+
         webRTCService.startScreenCapture(resultCode, data, fromId)
     }
 
@@ -49,6 +50,7 @@ class WebRTCManager @Inject constructor(
     }
 
     fun confirmSessionAndStartStreaming(fromId: String, sdpOffer: String) {
+        webRTCService.createPeerConnection(fromId)
         webRTCService.handleRemoteSessionDescription("offer", sdpOffer, fromId)
         webRTCService.createAndSendAnswer(fromId)
     }

@@ -89,28 +89,6 @@ class WebRTCService @Inject constructor(
 
         this.resultCode = resultCode // Store if needed
 
-        // --- REMOVED ---
-        // DO NOT get MediaProjection explicitly here. Let ScreenCapturerAndroid handle it.
-        // val mediaProjectionManager = context.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-        // try {
-        //     mediaProjection = mediaProjectionManager.getMediaProjection(resultCode, data)
-        // } catch (e: SecurityException) {
-        //     Log.e(TAG, "SecurityException getting MediaProjection.", e)
-        //     throw IllegalStateException("Failed to get MediaProjection", e)
-        // } catch (e: Exception) {
-        //     Log.e(TAG, "Exception getting MediaProjection", e)
-        //     throw IllegalStateException("Failed to get MediaProjection", e)
-        // }
-        // if (mediaProjection == null) {
-        //     Log.e(TAG, "MediaProjection is null after getMediaProjection call. Screen capture cannot start.")
-        //     isCapturing = false
-        //     throw IllegalStateException("MediaProjection could not be obtained.")
-        // }
-        // Log.d(TAG, "Successfully obtained MediaProjection instance.")
-        // mediaProjection?.registerCallback(mediaProjectionCallback, null) // Callback passed to ScreenCapturerAndroid now
-        // --- END REMOVED ---
-
-
         // --- Start Setup ---
         isCapturing = true // Set state tentatively (will be reset on failure)
         Log.d(TAG, "isCapturing set to true.")
@@ -139,11 +117,13 @@ class WebRTCService @Inject constructor(
             Log.d(TAG, "ScreenCapturerAndroid capture started.")
 
             // Proceed with WebRTC setup only after successful capture start
-            localVideoTrack = peerConnectionFactory?.createVideoTrack("video0", videoSource)
-            Log.d(TAG, "Local video track created.")
 
             createPeerConnection(fromId) // Setup WebRTC connection
             Log.d(TAG, "Peer connection creation initiated.")
+
+            /*localVideoTrack = peerConnectionFactory?.createVideoTrack("video0", videoSource)
+            Log.d(TAG, "Local video track created.")*/
+
 
         } catch (e: Exception) {
             Log.e(TAG, "Error during screen capture setup", e)
@@ -165,7 +145,7 @@ class WebRTCService @Inject constructor(
 
     // createPeerConnection and other WebRTC signalling methods remain the same
     // ... (onSignalingChange, onIceCandidate, handleRemoteSessionDescription, etc.) ...
-    private fun createPeerConnection(fromId: String) {
+     fun createPeerConnection(fromId: String) {
         val rtcConfig = PeerConnection.RTCConfiguration(iceServers).apply {
             sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
         }
@@ -211,6 +191,8 @@ class WebRTCService @Inject constructor(
             override fun onRemoveStream(mediaStream: MediaStream) {}
         })
 
+        localVideoTrack = peerConnectionFactory?.createVideoTrack("video0", videoSource)
+            Log.d(TAG, "Local video track created.")
         // Add track only if it was successfully created
         localVideoTrack?.let {
             peerConnection?.addTrack(it, listOf("ARDAMS"))
@@ -414,3 +396,4 @@ class WebRTCService @Inject constructor(
         fun getDeviceId(): String
     }
 }
+

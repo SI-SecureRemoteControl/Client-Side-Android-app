@@ -97,20 +97,7 @@ class ScreenSharingService : Service() {
         remoteUserId = fromId // Store the ID
 
         try {
-            // --- REMOVED ---
-            // DO NOT get MediaProjection here. Pass the result code and data directly.
-            // val mediaProjectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-            // mediaProjection = mediaProjectionManager.getMediaProjection(resultCode, data)
-            //
-            // if (mediaProjection == null) {
-            //     Log.e(TAG, "Failed to get MediaProjection instance") // This check is now done inside WebRTCService
-            //     stopSelf()
-            //     return
-            // }
-            // --- END REMOVED ---
 
-            // Pass the RESULT CODE and DATA Intent to WebRTCManager.
-            // WebRTCManager (via WebRTCService) will call getMediaProjection itself.
             webRTCManager.startScreenCapture(resultCode, data, fromId)
             isSharing = true // Set sharing state AFTER successful start in WebRTCManager (ideally WebRTCManager provides feedback)
 
@@ -130,11 +117,6 @@ class ScreenSharingService : Service() {
             Log.d(TAG, "Stopping screen sharing internally...")
             webRTCManager.stopScreenCapture()
 
-            // --- REMOVED ---
-            // No longer manages MediaProjection directly
-            // mediaProjection?.stop()
-            // mediaProjection = null
-            // --- END REMOVED ---
 
             resultData = null // Clear potentially stale intent data
             resultCode = Activity.RESULT_CANCELED
