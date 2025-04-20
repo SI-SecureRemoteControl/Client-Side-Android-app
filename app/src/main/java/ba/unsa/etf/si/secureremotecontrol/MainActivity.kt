@@ -51,7 +51,11 @@ class MainActivity : ComponentActivity() {
                 //webRTCManager.startScreenCapture(resultCode, data, fromId)
                 //Log.d("MainActivity", "Screen capture started successfully.")
                 val intent = ScreenSharingService.getStartIntent(this, resultCode, data, fromId)
-                startForegroundService(intent) // Start the foreground service
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                    startForegroundService(intent) // For API 26 and above
+                } else {
+                    startService(intent) // For API 24 and 25
+                }
             } else {
                 Log.e("MainActivity", "Screen capture permission denied or invalid data.")
             }
