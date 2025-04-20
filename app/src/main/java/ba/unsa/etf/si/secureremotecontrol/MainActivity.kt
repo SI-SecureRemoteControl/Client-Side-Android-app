@@ -7,6 +7,8 @@ import android.os.Bundle
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.result.ActivityResultLauncher
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -19,17 +21,41 @@ import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import javax.inject.Inject
+import android.provider.Settings
+import ba.unsa.etf.si.secureremotecontrol.data.webrtc.WebRTCManager
+import ba.unsa.etf.si.secureremotecontrol.service.ScreenSharingService
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
     @Inject
     lateinit var tokenDataStore: TokenDataStore
+    private lateinit var screenCaptureLauncher: ActivityResultLauncher<Intent>
 
+    @Inject
+    lateinit var webRTCManager: WebRTCManager // Inject WebRTCManager here
     private val SCREEN_CAPTURE_REQUEST_CODE = 1001
     private var onScreenCaptureResult: ((resultCode: Int, data: Intent) -> Unit)? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Initialize the ActivityResultLauncher
+        screenCaptureLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            val resultCode = result.resultCode
+            val data = result.data
+
+            Log.d("MainActivity", "Screen capture resultCode: $resultCode, data: $data")
+            if (result.resultCode == Activity.RESULT_OK && data != null) {
+                /*onScreenCaptureResult?.invoke(result.resultCode, result.data!!)
+                onScreenCaptureResult = null*/
+                val fromId = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID)
+                //webRTCManager.startScreenCapture(resultCode, data, fromId)
+                //Log.d("MainActivity", "Screen capture started successfully.")
+                val intent = ScreenSharingService.getStartIntent(this, resultCode, data, fromId)
+                startForegroundService(intent) // Start the foreground service
+            } else {
+                Log.e("MainActivity", "Screen capture permission denied or invalid data.")
+            }
+        }
         setContent {
             SecureRemoteControlTheme {
                 val navController = rememberNavController()
@@ -89,21 +115,10 @@ class MainActivity : ComponentActivity() {
         val mediaProjectionManager = getSystemService(MediaProjectionManager::class.java)
         val captureIntent = mediaProjectionManager.createScreenCaptureIntent()
         onScreenCaptureResult = callback
-        startActivityForResult(captureIntent, SCREEN_CAPTURE_REQUEST_CODE)
+        Log.d("MainActivity", "Starting screen capture with intent: $captureIntent")
+        screenCaptureLauncher.launch(captureIntent)
     }
 
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
 
-        if (requestCode == SCREEN_CAPTURE_REQUEST_CODE && resultCode == Activity.RESULT_OK && data != null) {
-            onScreenCaptureResult?.invoke(resultCode, data)
-
-            onScreenCaptureResult = null
-            Log.d("MainActivity", "Screen capture started successfully.")
-
-        } else {
-            Log.e("MainActivity", "Screen capture permission denied or invalid data.")
-        }
-    }
 
 }

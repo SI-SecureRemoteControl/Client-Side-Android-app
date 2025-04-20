@@ -17,6 +17,7 @@
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
     <application
         android:name=".RemoteControlApplication"
         android:allowBackup="true"
@@ -47,6 +48,7 @@
 
         <service
             android:name=".service.ScreenSharingService"
+            android:enabled="true"
             android:exported="false"
             android:foregroundServiceType="mediaProjection" />
 

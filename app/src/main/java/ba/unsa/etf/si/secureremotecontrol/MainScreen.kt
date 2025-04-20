@@ -25,6 +25,8 @@ import ba.unsa.etf.si.secureremotecontrol.presentation.main.MainViewModel
 import ba.unsa.etf.si.secureremotecontrol.presentation.main.SessionState
 import android.provider.Settings
 import android.content.Intent
+import android.util.Log
+
 @Composable
 fun MainScreen(
     viewModel: MainViewModel = hiltViewModel(),
@@ -58,7 +60,10 @@ fun MainScreen(
                                     context.contentResolver,
                                     Settings.Secure.ANDROID_ID
                                 )
+                                Log.d("MainScreen", "MainScreen je problem: $resultCode, data: $data, fromId: $fromId")
                                 viewModel.startStreaming(resultCode, data, fromId)
+                                //resultCode = 0
+                                //data.replaceExtras(null)
                             }
                         }) {
                             Text("Yes")

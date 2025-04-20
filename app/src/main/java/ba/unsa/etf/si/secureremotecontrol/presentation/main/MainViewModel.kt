@@ -157,13 +157,34 @@ class MainViewModel @Inject constructor(
             }
         }
     }
-    fun startStreaming(resultCode: Int, data: Intent, fromId: String) {
+   /* fun startStreaming(resultCode: Int, data: Intent, fromId: String) {
         viewModelScope.launch {
             try {
                 //webRTCManager.startScreenCapture(resultCode, data, fromId)
                 val intent = ScreenSharingService.getStartIntent(context, resultCode, data, fromId)
                 context.startForegroundService(intent)
                 _sessionState.value = SessionState.Streaming
+            } catch (e: Exception) {
+                _sessionState.value = SessionState.Error("Failed to start streaming: ${e.localizedMessage}")
+            }
+        }
+    }*/
+
+    fun startStreaming(resultCode: Int, data: Intent, fromId: String) {
+        viewModelScope.launch {
+            try {
+                //
+                // Start the foreground service for screen sharing first
+                val intent = ScreenSharingService.getStartIntent(context, resultCode, data, fromId)
+                context.startForegroundService(intent)
+
+                // Ensure the screen capture is stopped before starting a new one
+                //webRTCManager.stopScreenCapture()
+
+
+
+                _sessionState.value = SessionState.Streaming
+
             } catch (e: Exception) {
                 _sessionState.value = SessionState.Error("Failed to start streaming: ${e.localizedMessage}")
             }
