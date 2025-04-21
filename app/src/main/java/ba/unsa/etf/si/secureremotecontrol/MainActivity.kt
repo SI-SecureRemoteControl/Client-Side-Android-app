@@ -1,5 +1,6 @@
 package ba.unsa.etf.si.secureremotecontrol
 
+import NotificationPermissionHandler
 import android.app.Activity
 import android.content.Intent
 import android.media.projection.MediaProjectionManager
@@ -38,6 +39,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        val notificationPermissionHandler = NotificationPermissionHandler(this)
+        notificationPermissionHandler.checkAndRequestNotificationPermission()
         // Initialize the ActivityResultLauncher
         screenCaptureLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
             val resultCode = result.resultCode
