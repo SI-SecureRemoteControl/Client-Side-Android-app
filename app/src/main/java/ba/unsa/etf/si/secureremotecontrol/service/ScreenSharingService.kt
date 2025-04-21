@@ -138,13 +138,23 @@ class ScreenSharingService : Service() {
         Log.d(TAG, "Screen sharing service stopped.")
     }
 
-    override fun onDestroy() {
+    /*override fun onDestroy() {
         Log.d(TAG, "onDestroy called.")
         // Ensure resources are released even if stopScreenSharing wasn't explicitly called
         stopScreenSharingInternal() // Stop capture if still running
         webRTCManager.release() // Release WebRTC resources
         super.onDestroy()
         Log.d(TAG, "ScreenSharingService destroyed.")
+    }*/
+    // Inside ScreenSharingService.kt
+    override fun onDestroy() {
+        Log.d("ScreenSharingService", "onDestroy called. Stopping screen capture and releasing WebRTC resources.")
+        webRTCManager.stopScreenCapture()
+        // Consider if release() is appropriate here. If the service stopping means
+        // the whole WebRTC functionality is done until the app restarts, then yes.
+        // If the service might restart soon, maybe don't release the factory/EGL yet.
+        // webRTCManager.release() // << Be cautious with this here
+        super.onDestroy()
     }
 
     // createNotificationChannel() and createNotification() remain the same

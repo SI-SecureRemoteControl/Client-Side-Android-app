@@ -101,11 +101,17 @@ class WebRTCService @Inject constructor(
 
     // **** REVISED startScreenCapture ****
     fun startScreenCapture(resultCode: Int, data: Intent, fromId: String) {
+        if (localVideoTrack != null || videoSource != null || surfaceTextureHelper != null || screenCapturer != null || peerConnection != null) {
+            Log.e(TAG, "[startScreenCapture] PRE-CHECK FAILED: Old resources still exist! Track: ${localVideoTrack != null}, Source: ${videoSource != null}, Helper: ${surfaceTextureHelper != null}, Capturer: ${screenCapturer != null}, PC: ${peerConnection != null}. Forcing stop again.")
+            stopScreenCapture() // Try stopping again just in case
+            // You might even want to throw an exception here or delay before retrying
+        }
         Log.d(TAG, "[startScreenCapture] Attempting... isCapturing: $isCapturing")
         if (isCapturing) {
             Log.w(TAG, "[startScreenCapture] Already capturing. Stopping previous.")
             stopScreenCapture()
         }
+
         if (rootEglBase == null || peerConnectionFactory == null) {
             Log.e(TAG, "[startScreenCapture] Cannot start: EGL/Factory not ready.")
             throw IllegalStateException("WebRTCService EGL or Factory not ready.")
@@ -472,7 +478,7 @@ class WebRTCService @Inject constructor(
             }
         }
     }
-
+/*
     fun stopScreenCapture() {
         Log.d(TAG, "[stopScreenCapture] Attempting... isCapturing: $isCapturing")
         if (!isCapturing && screenCapturer == null) { Log.d(TAG, "[stopScreenCapture] Already stopped."); return }
@@ -500,6 +506,75 @@ class WebRTCService @Inject constructor(
         resultCode = null
         Log.d(TAG, "[stopScreenCapture] Finished. isCapturing: $isCapturing")
     }
+*/
+fun stopScreenCapture() {
+    Log.d(TAG, "[stopScreenCapture] Attempting... isCapturing: $isCapturing")
+    if (!isCapturing && screenCapturer == null && peerConnection == null) { // More robust check
+        Log.d(TAG, "[stopScreenCapture] Already stopped or nothing to stop.")
+        return
+    }
+
+    // Clear any pending offer immediately
+    bufferedRemoteOffer = null
+    bufferedOfferFromId = null
+
+    // --- Stop Capturer ---
+    try {
+        screenCapturer?.stopCapture()
+        Log.d(TAG, "[stopScreenCapture] Capturer stopCapture() called.")
+    } catch (e: Exception) {
+        Log.e(TAG, "[stopScreenCapture] Error stopping screen capturer", e)
+        // Even if this fails, try to clean up other resources
+    } finally {
+        screenCapturer = null // Nullify even if stop failed
+    }
+
+    // --- Dispose Video Track ---
+    try {
+        localVideoTrack?.dispose()
+        Log.d(TAG, "[stopScreenCapture] Local video track disposed.")
+    } catch (e: Exception) {
+        Log.e(TAG, "[stopScreenCapture] Error disposing local video track", e)
+    } finally {
+        localVideoTrack = null
+    }
+
+    // --- Dispose Video Source ---
+    try {
+        videoSource?.dispose()
+        Log.d(TAG, "[stopScreenCapture] Video source disposed.")
+    } catch (e: Exception) {
+        Log.e(TAG, "[stopScreenCapture] Error disposing video source", e)
+    } finally {
+        videoSource = null
+    }
+
+    // --- Dispose Surface Texture Helper ---
+    try {
+        // Check if it needs releasing the handler too? Usually dispose is enough.
+        surfaceTextureHelper?.dispose()
+        Log.d(TAG, "[stopScreenCapture] SurfaceTextureHelper disposed.")
+    } catch (e: Exception) {
+        Log.e(TAG, "[stopScreenCapture] Error disposing SurfaceTextureHelper", e)
+    } finally {
+        surfaceTextureHelper = null
+    }
+
+    // --- Close Peer Connection ---
+    try {
+        peerConnection?.close() // Use close() for PeerConnection
+        Log.d(TAG,"[stopScreenCapture] PeerConnection closed.")
+    } catch (e: Exception) {
+        Log.e(TAG,"[stopScreenCapture] Error closing PeerConnection", e)
+    } finally {
+        peerConnection = null // Nullify after closing
+    }
+
+    // --- Reset State ---
+    isCapturing = false
+    resultCode = null // Assuming resultCode is session-specific
+    Log.d(TAG, "[stopScreenCapture] Cleanup finished. isCapturing: $isCapturing")
+}
 
     fun release() {
         Log.i(TAG, "[release] Releasing resources...")
