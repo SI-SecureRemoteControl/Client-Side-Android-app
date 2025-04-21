@@ -20,6 +20,8 @@ import org.json.JSONObject
 import javax.inject.Inject
 import ba.unsa.etf.si.secureremotecontrol.data.webrtc.WebRTCManager
 import android.content.Intent
+import android.os.Build
+import androidx.annotation.RequiresApi
 import androidx.lifecycle.LifecycleOwner
 import ba.unsa.etf.si.secureremotecontrol.service.ScreenSharingService
 import org.json.JSONException
@@ -33,10 +35,13 @@ class MainViewModel @Inject constructor(
     private val webRTCManager: WebRTCManager
 ) : ViewModel() {
 
+    private val TAG = "MainViewModel"
+
     private val _sessionState = MutableStateFlow<SessionState>(SessionState.Idle)
     val sessionState: StateFlow<SessionState> = _sessionState
 
     private var messageObservationJob: Job? = null
+    private var timeoutJob: Job? = null
 
     init {
         connectAndObserveMessages()
@@ -48,13 +53,11 @@ class MainViewModel @Inject constructor(
                 webSocketService.connectWebSocket()
                 observeMessages()
             } catch (e: Exception) {
-                Log.e("MainViewModel", "Failed to connect WebSocket: ${e.localizedMessage}")
+                Log.e(TAG, "Failed to connect WebSocket: ${e.localizedMessage}")
                 _sessionState.value = SessionState.Error("Failed to connect WebSocket")
             }
         }
     }
-
-    private var timeoutJob: Job? = null
 
     fun requestSession() {
         viewModelScope.launch {
@@ -68,7 +71,7 @@ class MainViewModel @Inject constructor(
 
             // Start a timeout job
             timeoutJob = viewModelScope.launch {
-                delay(30000L) // 10 seconds timeout
+                delay(30000L) // 30 seconds timeout
                 if (_sessionState.value == SessionState.Requesting || _sessionState.value == SessionState.Waiting) {
                     _sessionState.value = SessionState.Timeout
                 }
@@ -102,7 +105,6 @@ class MainViewModel @Inject constructor(
         }
     }
 
-
     fun disconnectSession() {
         viewModelScope.launch {
             val token = tokenDataStore.token.firstOrNull()
@@ -134,152 +136,164 @@ class MainViewModel @Inject constructor(
     private fun observeMessages() {
         messageObservationJob = viewModelScope.launch {
             webSocketService.observeMessages().collect { message ->
-                Log.d("MainViewModel", "Raw message received: $message") // Log the raw message for debugging
-                try { // Add try-catch around JSON parsing
+                Log.d(TAG, "Raw message received: $message")
+                try {
                     val response = JSONObject(message)
-                    val messageType = response.optString("type") // Use optString for safety
+                    val messageType = response.optString("type", "")
 
                     when (messageType) {
                         "info" -> {
-                            Log.d("MainViewModel", "Received info message")
+                            Log.d(TAG, "Received info message")
                             _sessionState.value = SessionState.Waiting
                         }
                         "error" -> {
                             val errorMessage = response.optString("message", "Unknown error")
-                            Log.e("MainViewModel", "Received error message: $errorMessage")
+                            Log.e(TAG, "Received error message: $errorMessage")
                             _sessionState.value = SessionState.Error(errorMessage)
-                            timeoutJob?.cancel() // Cancel timeout on error
+                            timeoutJob?.cancel()
                         }
                         "approved" -> {
-                            Log.d("MainViewModel", "Received approved message")
+                            Log.d(TAG, "Received approved message")
                             _sessionState.value = SessionState.Accepted
-                            // Optionally, you might receive the sessionId here if needed later
-                            // val sessionId = response.optString("sessionId")
                         }
                         "rejected" -> {
                             val reason = response.optString("message", "Session rejected")
-                            Log.w("MainViewModel", "Received rejected message: $reason")
+                            Log.w(TAG, "Received rejected message: $reason")
                             _sessionState.value = SessionState.Rejected
-                            // Optionally, handle session ID if provided
-                            // val sessionId = response.optString("sessionId")
                         }
-                        "offer" -> { // Handle incoming SDP offer
-                            Log.d("MainViewModel", "Received offer message")
-                            val fromId = response.optString("fromId", "unknown_sender") // Get fromId safely
+                        "session_confirmed" -> {
+                            Log.d(TAG, "Server confirmed session start.")
+                        }
+                        "offer" -> {
+                            // Critical part - need to distinguish between SDP offers and ICE candidates
+                            val payload = response.optJSONObject("payload")
+                            if (payload != null) {
+                                // Check if this is actually an ICE candidate message
+                                val parsedMessage = payload.optJSONObject("parsedMessage")
+                                if (parsedMessage != null) {
+                                    val innerType = parsedMessage.optString("type", "")
 
-                            // Safely get the top-level payload object
-                            val topLevelPayload = response.optJSONObject("payload")
-                            var sdp: String? = null // Use nullable String to store found SDP
-
-                            if (topLevelPayload != null) {
-                                Log.d("MainViewModel", "Found topLevelPayload: $topLevelPayload")
-
-                                // *** START: Handle Nested Structure ***
-                                // Try to get the 'parsedMessage' object within the top-level payload
-                                val parsedMessageObject = topLevelPayload.optJSONObject("parsedMessage")
-
-                                if (parsedMessageObject != null) {
-                                    Log.d("MainViewModel", "Found parsedMessageObject: $parsedMessageObject")
-                                    // Try to get the *inner* 'payload' object within 'parsedMessage'
-                                    val innerPayloadObject = parsedMessageObject.optJSONObject("payload")
-
-                                    if (innerPayloadObject != null) {
-                                        Log.d("MainViewModel", "Found innerPayloadObject: $innerPayloadObject")
-                                        // Try to get the 'sdp' string from the *inner* payload
-                                        sdp = innerPayloadObject.optString("sdp").takeIf { it.isNotEmpty() } // Get SDP only if it's not empty
-                                        if (sdp != null) {
-                                            Log.d("MainViewModel", "Successfully extracted SDP from nested structure.")
-                                        } else {
-                                            Log.w("MainViewModel", "Found inner payload, but 'sdp' key was missing or empty.")
-                                        }
+                                    if (innerType == "ice-candidate") {
+                                        // This is actually an ICE candidate
+                                        handleIceCandidate(response)
+                                    } else if (innerType == "offer") {
+                                        // This is a genuine SDP offer
+                                        handleSdpOffer(response)
                                     } else {
-                                        Log.w("MainViewModel", "'parsedMessage' object did not contain an 'payload' object.")
+                                        Log.w(TAG, "Unknown inner message type: $innerType")
                                     }
                                 } else {
-                                    // *** END: Handle Nested Structure ***
-
-                                    // *** FALLBACK: Check for direct SDP (optional, but good practice) ***
-                                    // If 'parsedMessage' wasn't found, maybe the server fixed itself?
-                                    // Check if 'sdp' exists directly in the top-level payload.
-                                    Log.d("MainViewModel", "Did not find 'parsedMessage' object. Checking for direct 'sdp' in topLevelPayload.")
-                                    sdp = topLevelPayload.optString("sdp").takeIf { it.isNotEmpty() }
-                                    if (sdp != null) {
-                                        Log.d("MainViewModel", "Found SDP directly in topLevelPayload (fallback).")
-                                    }
-                                    // *** END FALLBACK ***
+                                    // Direct structure without parsedMessage
+                                    handleSdpOffer(response)
                                 }
-
-                            } else {
-                                // Top-level payload object is missing entirely
-                                Log.e("MainViewModel", "Received 'offer' message from $fromId, but 'payload' object is missing or not a JSON object. Full message: $message")
-                                _sessionState.value = SessionState.Error("Invalid offer received (missing payload)")
                             }
-
-                            // --- Process the result ---
-                            if (sdp != null) {
-                                // We successfully extracted the SDP from *somewhere* (nested or direct)
-                                Log.d("MainViewModel", "Processing offer with SDP from $fromId")
-                                try {
-                                    webRTCManager.confirmSessionAndStartStreaming(fromId, sdp)
-                                } catch (e: Exception) {
-                                    Log.e("MainViewModel", "Error calling confirmSessionAndStartStreaming", e)
-                                    _sessionState.value = SessionState.Error("Failed to process offer: ${e.message}")
-                                }
-                            } else {
-                                // Failure: SDP was not found in either the nested or direct location
-                                Log.e("MainViewModel", "Received 'offer' message from $fromId, but failed to find 'sdp' in any expected location within the payload. Payload received: ${topLevelPayload}")
-                                _sessionState.value = SessionState.Error("Invalid offer structure received (SDP not found)")
-                            }
-                        } // End of "offer" case
-
-                        // Handle other potential message types from the server if necessary
-                        "session_confirmed" -> {
-                            Log.d("MainViewModel", "Server confirmed session start.")
-                            // Update UI or state if needed
                         }
-                        "" -> {
-                            Log.w("MainViewModel", "Received message with empty type.")
+                        "ice-candidate" -> {
+                            handleIceCandidate(response)
                         }
                         else -> {
-                            Log.w("MainViewModel", "Received unhandled message type: $messageType")
+                            Log.d(TAG, "Unhandled message type: $messageType")
                         }
                     }
                 } catch (e: JSONException) {
-                    Log.e("MainViewModel", "Failed to parse incoming WebSocket message: $message", e)
-                    // Optionally update UI to show a generic parsing error
-                    _sessionState.value = SessionState.Error("Failed to understand server message")
+                    Log.e(TAG, "Failed to parse WebSocket message: $message", e)
+                    _sessionState.value = SessionState.Error("Failed to parse server message")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error processing message: ${e.message}", e)
                 }
             }
         }
     }
-   /* fun startStreaming(resultCode: Int, data: Intent, fromId: String) {
-        viewModelScope.launch {
-            try {
-                //webRTCManager.startScreenCapture(resultCode, data, fromId)
-                val intent = ScreenSharingService.getStartIntent(context, resultCode, data, fromId)
-                context.startForegroundService(intent)
-                _sessionState.value = SessionState.Streaming
-            } catch (e: Exception) {
-                _sessionState.value = SessionState.Error("Failed to start streaming: ${e.localizedMessage}")
-            }
-        }
-    }*/
 
+    private fun handleSdpOffer(response: JSONObject) {
+        try {
+            val fromId = response.optString("fromId", "unknown_sender")
+            val payload = response.optJSONObject("payload")
+
+            if (payload != null) {
+                val parsedMessage = payload.optJSONObject("parsedMessage")
+
+                if (parsedMessage != null) {
+                    val innerPayload = parsedMessage.optJSONObject("payload")
+
+                    if (innerPayload != null && innerPayload.has("sdp")) {
+                        val sdp = innerPayload.getString("sdp")
+                        Log.d(TAG, "Found SDP in nested payload structure")
+                        webRTCManager.confirmSessionAndStartStreaming(fromId, sdp)
+                        return
+                    }
+                }
+
+                // Check direct structure just in case
+                if (payload.has("sdp")) {
+                    val sdp = payload.getString("sdp")
+                    Log.d(TAG, "Found SDP directly in payload")
+                    webRTCManager.confirmSessionAndStartStreaming(fromId, sdp)
+                    return
+                }
+            }
+
+            Log.e(TAG, "SDP not found in offer message: $payload")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error handling SDP offer: ${e.message}", e)
+            _sessionState.value = SessionState.Error("Error processing offer: ${e.message}")
+        }
+    }
+
+    private fun handleIceCandidate(response: JSONObject) {
+        try {
+            val fromId = response.optString("fromId", "unknown_sender")
+            val payload = response.optJSONObject("payload")
+
+            if (payload != null) {
+                val parsedMessage = payload.optJSONObject("parsedMessage")
+
+                if (parsedMessage != null) {
+                    val innerPayload = parsedMessage.optJSONObject("payload")
+
+                    if (innerPayload != null) {
+                        val candidate = innerPayload.optString("candidate", "")
+                        val sdpMid = innerPayload.optString("sdpMid", "")
+                        val sdpMLineIndex = innerPayload.optInt("sdpMLineIndex", 0)
+
+                        // Only forward if not an empty candidate
+                        if (candidate.isNotEmpty()) {
+                            Log.d(TAG, "Processing ICE candidate")
+                            try {
+                                webRTCManager.handleRtcMessage("ice-candidate", fromId, innerPayload)
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Error processing ICE candidate", e)
+                            }
+                        } else {
+                            Log.d(TAG, "Received empty ICE candidate (end of candidates)")
+                        }
+                        return
+                    }
+                }
+
+                // Check direct structure as well
+                val candidate = payload.optString("candidate", "")
+                if (candidate.isNotEmpty()) {
+                    Log.d(TAG, "Processing ICE candidate from direct payload")
+                    try {
+                        webRTCManager.handleRtcMessage("ice-candidate", fromId, payload)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Error processing direct ICE candidate", e)
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error handling ICE candidate: ${e.message}", e)
+        }
+    }
+
+    @RequiresApi(Build.VERSION_CODES.O)
     fun startStreaming(resultCode: Int, data: Intent, fromId: String) {
         viewModelScope.launch {
             try {
-                //
-                // Start the foreground service for screen sharing first
                 val intent = ScreenSharingService.getStartIntent(context, resultCode, data, fromId)
                 context.startForegroundService(intent)
-
-                // Ensure the screen capture is stopped before starting a new one
-                //webRTCManager.stopScreenCapture()
-
-
-
                 _sessionState.value = SessionState.Streaming
-
             } catch (e: Exception) {
                 _sessionState.value = SessionState.Error("Failed to start streaming: ${e.localizedMessage}")
             }
@@ -301,6 +315,12 @@ class MainViewModel @Inject constructor(
         messageObservationJob?.cancel()
         messageObservationJob = null
     }
+
+    override fun onCleared() {
+        super.onCleared()
+        stopObservingMessages()
+        timeoutJob?.cancel()
+    }
 }
 
 sealed class SessionState {
@@ -314,4 +334,3 @@ sealed class SessionState {
     data class Error(val message: String) : SessionState()
     object Streaming : SessionState()
 }
-

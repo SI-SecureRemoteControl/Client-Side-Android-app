@@ -23,38 +23,78 @@ class WebRTCManager @Inject constructor(
     private val TAG = "WebRTCManager"
     private val coroutineScope = CoroutineScope(Dispatchers.IO)
 
+    // Key method: starts screen capture and creates offer proactively
     fun startScreenCapture(resultCode: Int, data: Intent, fromId: String) {
-       //webRTCService.stopScreenCapture()
         if (data == null) {
             Log.e(TAG, "Invalid resultData. Cannot start screen capture.")
             return
         }
 
-        webRTCService.startScreenCapture(resultCode, data, fromId)
+        try {
+            // Ensure any existing capture is stopped first
+            webRTCService.stopScreenCapture()
+
+            // Wait a moment to ensure resources are released
+            Thread.sleep(100)
+
+            // Start new capture
+            webRTCService.startScreenCapture(resultCode, data, fromId)
+
+            // IMPORTANT: Proactively create SDP offer after initialization
+            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                Log.d(TAG, "Proactively creating offer to initiate connection")
+                createOffer("webadmin")
+            }, 1000)  // 1 second delay to ensure PeerConnection is fully initialized
+
+            // Also check buffered offers as a backup
+            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                checkBufferedOffers()
+            }, 1500)
+
+            Log.d(TAG, "Screen sharing initiated for user: $fromId")
+
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to start screen capture", e)
+            throw e  // Re-throw so caller knows about the failure
+        }
     }
 
     fun stopScreenCapture() {
-        webRTCService.stopScreenCapture()
+        try {
+            webRTCService.stopScreenCapture()
+        } catch (e: Exception) {
+            Log.e(TAG, "Error stopping screen capture", e)
+        }
     }
 
     fun release() {
-        webRTCService.release()
+        try {
+            webRTCService.release()
+        } catch (e: Exception) {
+            Log.e(TAG, "Error releasing WebRTC resources", e)
+        }
     }
 
     fun startObservingRtcMessages(lifecycleOwner: LifecycleOwner) {
         lifecycleOwner.lifecycleScope.launch {
-            webSocketService.observeRtcMessages().collect { rtcMessage ->
-                handleRtcMessage(rtcMessage.type, rtcMessage.fromId, rtcMessage.payload)
+            try {
+                webSocketService.observeRtcMessages().collect { rtcMessage ->
+                    handleRtcMessage(rtcMessage.type, rtcMessage.fromId, rtcMessage.payload)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error observing RTC messages", e)
             }
         }
     }
 
     fun confirmSessionAndStartStreaming(fromId: String, sdpOffer: String) {
-       /* webRTCService.createPeerConnection(fromId)
-        webRTCService.handleRemoteSessionDescription("offer", sdpOffer, fromId)
-        webRTCService.createAndSendAnswer(fromId)*/
         Log.d(TAG, "[confirmSessionAndStartStreaming] Handling remote offer from $fromId")
-        webRTCService.handleRemoteSessionDescription("offer", sdpOffer, fromId)
+        try {
+            webRTCService.handleRemoteSessionDescription("offer", sdpOffer, fromId)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error handling SDP offer", e)
+            throw e  // Re-throw to allow caller to handle the error
+        }
     }
 
     fun getScreenCaptureIntent(activity: Activity): Intent {
@@ -62,30 +102,70 @@ class WebRTCManager @Inject constructor(
         return mediaProjectionManager.createScreenCaptureIntent()
     }
 
-    private fun handleRtcMessage(type: String, fromId: String, payload: Any) {
+    fun handleRtcMessage(type: String, fromId: String, payload: Any) {
         try {
             val payloadJson = payload as? JSONObject ?: JSONObject(payload.toString())
 
+            Log.d(TAG, "Handling RTC message of type: $type from: $fromId")
+
             when (type) {
                 "offer" -> {
-                    val sdpType = payloadJson.getString("type")
-                    val sdp = payloadJson.getString("sdp")
-                    webRTCService.handleRemoteSessionDescription(sdpType, sdp, fromId)
+                    val sdpType = payloadJson.optString("type", "offer")
+                    val sdp = payloadJson.optString("sdp")
+                    if (sdp.isNotEmpty()) {
+                        webRTCService.handleRemoteSessionDescription(sdpType, sdp, fromId)
+                    } else {
+                        Log.e(TAG, "Received offer without SDP: $payloadJson")
+                    }
                 }
                 "answer" -> {
-                    val sdpType = payloadJson.getString("type")
-                    val sdp = payloadJson.getString("sdp")
-                    webRTCService.handleRemoteSessionDescription(sdpType, sdp, fromId)
+                    val sdpType = payloadJson.optString("type", "answer")
+                    val sdp = payloadJson.optString("sdp")
+                    if (sdp.isNotEmpty()) {
+                        webRTCService.handleRemoteSessionDescription(sdpType, sdp, fromId)
+                    } else {
+                        Log.e(TAG, "Received answer without SDP: $payloadJson")
+                    }
                 }
                 "ice-candidate" -> {
-                    val candidate = payloadJson.getString("candidate")
-                    val sdpMid = payloadJson.getString("sdpMid")
-                    val sdpMLineIndex = payloadJson.getInt("sdpMLineIndex")
-                    webRTCService.handleRemoteIceCandidate(candidate, sdpMid, sdpMLineIndex)
+                    val candidate = payloadJson.optString("candidate", "")
+                    val sdpMid = payloadJson.optString("sdpMid", "")
+                    val sdpMLineIndex = payloadJson.optInt("sdpMLineIndex", 0)
+
+                    // Only process if candidate is not empty
+                    if (candidate.isNotEmpty()) {
+                        webRTCService.handleRemoteIceCandidate(candidate, sdpMid, sdpMLineIndex)
+                    } else {
+                        Log.d(TAG, "Received empty ICE candidate (end of candidates)")
+                        // Empty candidate is normal at end of ICE gathering
+                    }
+                }
+                else -> {
+                    Log.w(TAG, "Unhandled RTC message type: $type")
                 }
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error handling RTC message", e)
+            Log.e(TAG, "Error handling RTC message: $type", e)
+        }
+    }
+
+    fun checkBufferedOffers() {
+        Log.d(TAG, "Checking for buffered offers...")
+        try {
+            // Calls processBufferedOffer method in WebRTCService
+            webRTCService.processBufferedOffers()
+        } catch (e: Exception) {
+            Log.e(TAG, "Error checking buffered offers", e)
+        }
+    }
+
+    // Key method: creates an SDP offer to send to web client
+    fun createOffer(peerId: String) {
+        try {
+            Log.d(TAG, "Proactively creating offer for $peerId")
+            webRTCService.createAndSendOffer(peerId)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error creating offer", e)
         }
     }
 }
