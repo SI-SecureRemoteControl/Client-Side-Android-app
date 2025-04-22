@@ -316,11 +316,37 @@ class WebRTCService @Inject constructor(
     }
 
     // Handle incoming ICE candidates
-    fun handleRemoteIceCandidate(candidate: String, sdpMid: String, sdpMLineIndex: Int) {
+    /*fun handleRemoteIceCandidate(candidate: String, sdpMid: String, sdpMLineIndex: Int) {
         Log.d(TAG, "[handleRemoteIceCandidate] Adding remote candidate.")
         if (peerConnection == null) { Log.w(TAG, "PC is null, cannot add ICE candidate."); return; }
         val iceCandidate = IceCandidate(sdpMid, sdpMLineIndex, candidate)
         peerConnection?.addIceCandidate(iceCandidate)
+    }*/
+    // Add this as a class variable
+    private val bufferedIceCandidates = mutableListOf<IceCandidate>()
+
+    fun handleRemoteIceCandidate(candidate: String, sdpMid: String, sdpMLineIndex: Int) {
+        Log.d(TAG, "[handleRemoteIceCandidate] Adding remote candidate.")
+        val iceCandidate = IceCandidate(sdpMid, sdpMLineIndex, candidate)
+
+        if (peerConnection == null) {
+            Log.d(TAG, "PC is null, buffering ICE candidate for later.")
+            bufferedIceCandidates.add(iceCandidate)
+            return
+        }
+
+        peerConnection?.addIceCandidate(iceCandidate)
+    }
+
+    // Add this function to process buffered candidates after the PeerConnection is created
+    fun processPendingIceCandidates() {
+        if (peerConnection != null && bufferedIceCandidates.isNotEmpty()) {
+            Log.d(TAG, "Processing ${bufferedIceCandidates.size} buffered ICE candidates")
+            bufferedIceCandidates.forEach { candidate ->
+                peerConnection?.addIceCandidate(candidate)
+            }
+            bufferedIceCandidates.clear()
+        }
     }
 
     // Handle incoming SDP offers/answers
@@ -364,6 +390,7 @@ class WebRTCService @Inject constructor(
                         createAndSendAnswer(fromId)
                     }, 300)  // Small delay for stability
                 }
+                processPendingIceCandidates()
             }
 
             override fun onSetFailure(error: String?) {
