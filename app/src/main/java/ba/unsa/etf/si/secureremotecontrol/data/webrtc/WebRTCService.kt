@@ -34,9 +34,11 @@ class WebRTCService @Inject constructor(
     private var screenCapturer: VideoCapturer? = null
     private var isCapturing = false
 
-    // Buffering variables for SDP offers
-    private var bufferedRemoteOffer: SessionDescription? = null
-    private var bufferedOfferFromId: String? = null
+    // Store pending ICE candidates
+    private val pendingIceCandidates = mutableListOf<IceCandidate>()
+
+    // Store current peer ID
+    private var currentPeerId: String? = null
 
     private val iceServers = listOf(
         PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer()
@@ -76,13 +78,12 @@ class WebRTCService @Inject constructor(
         }
     }
 
-    fun processBufferedOffers() {
-        Log.d(TAG, "processBufferedOffers called externally")
-        processBufferedOffer()
-    }
-
     private fun initPeerConnectionFactory() {
-        if (rootEglBase == null) { Log.e(TAG, "Cannot init PCF, rootEglBase is null."); return; }
+        if (rootEglBase == null) {
+            Log.e(TAG, "Cannot init PCF, rootEglBase is null.")
+            return
+        }
+
         Log.d(TAG, "Initializing PeerConnectionFactory...")
         val options = PeerConnectionFactory.InitializationOptions.builder(context)
             .setEnableInternalTracer(true)
@@ -98,21 +99,26 @@ class WebRTCService @Inject constructor(
             .setVideoDecoderFactory(decoderFactory)
             .createPeerConnectionFactory()
 
-        if (peerConnectionFactory == null) { Log.e(TAG, "PeerConnectionFactory creation returned NULL.") }
-        else { Log.d(TAG, "PeerConnectionFactory initialized successfully (Non-null).") }
+        if (peerConnectionFactory == null) {
+            Log.e(TAG, "PeerConnectionFactory creation returned NULL.")
+        } else {
+            Log.d(TAG, "PeerConnectionFactory initialized successfully (Non-null).")
+        }
     }
 
     // Main method for screen capture setup
     fun startScreenCapture(resultCode: Int, data: Intent, fromId: String) {
-        if (localVideoTrack != null || videoSource != null || surfaceTextureHelper != null || screenCapturer != null || peerConnection != null) {
-            Log.e(TAG, "[startScreenCapture] PRE-CHECK FAILED: Old resources still exist! Track: ${localVideoTrack != null}, Source: ${videoSource != null}, Helper: ${surfaceTextureHelper != null}, Capturer: ${screenCapturer != null}, PC: ${peerConnection != null}. Forcing stop again.")
-            stopScreenCapture() // Try stopping again just in case
-        }
-        Log.d(TAG, "[startScreenCapture] Attempting... isCapturing: $isCapturing")
-        if (isCapturing) {
-            Log.w(TAG, "[startScreenCapture] Already capturing. Stopping previous.")
+        // Store the peer ID
+        currentPeerId = fromId
+
+        // First clean up any existing resources
+        if (localVideoTrack != null || videoSource != null || surfaceTextureHelper != null ||
+            screenCapturer != null || peerConnection != null) {
+            Log.d(TAG, "[startScreenCapture] Cleaning up existing resources first")
             stopScreenCapture()
         }
+
+        Log.d(TAG, "[startScreenCapture] Starting for peer: $fromId")
 
         if (rootEglBase == null || peerConnectionFactory == null) {
             Log.e(TAG, "[startScreenCapture] Cannot start: EGL/Factory not ready.")
@@ -121,85 +127,34 @@ class WebRTCService @Inject constructor(
 
         this.resultCode = resultCode
         isCapturing = true
-        Log.d(TAG, "[startScreenCapture] isCapturing set true.")
-
-        var tempVideoSource: VideoSource? = null      // Use local vars for safety
-        var tempLocalVideoTrack: VideoTrack? = null   // Use local vars for safety
 
         try {
-            Log.d(TAG, "[startScreenCapture] Setting up resources...")
+            // Set up media components
             surfaceTextureHelper = SurfaceTextureHelper.create("CaptureThread", rootEglBase!!.eglBaseContext)
-            Log.d(TAG,"[startScreenCapture] SurfaceTextureHelper created.")
+            videoSource = peerConnectionFactory!!.createVideoSource(true) // isScreencast=true
+            localVideoTrack = peerConnectionFactory!!.createVideoTrack("video0", videoSource)
 
-            // Create VideoSource (BEFORE PeerConnection)
-            Log.d(TAG,"[startScreenCapture] Creating VideoSource...")
-            tempVideoSource = peerConnectionFactory!!.createVideoSource(true) // isScreencast=true
-            if (tempVideoSource == null) {
-                throw IllegalStateException("VideoSource creation failed.")
-            }
-            videoSource = tempVideoSource // Assign to member variable *after* success
+            // Set up screen capturer
+            screenCapturer = createScreenCapturer(data)
+            screenCapturer?.initialize(surfaceTextureHelper, context, videoSource!!.capturerObserver)
 
-            Log.d(TAG, "[startScreenCapture] VideoSource created successfully")
-
-            // Create VideoTrack (BEFORE PeerConnection)
-            Log.d(TAG, "[startScreenCapture] Creating video track...")
-            tempLocalVideoTrack = peerConnectionFactory!!.createVideoTrack("video0", videoSource) // Use non-null source
-            if (tempLocalVideoTrack == null) {
-                throw IllegalStateException("LocalVideoTrack creation failed.")
-            }
-            localVideoTrack = tempLocalVideoTrack // Assign to member variable *after* success
-            Log.d(TAG, "[startScreenCapture] Local video track created: ID=${localVideoTrack?.id()}")
-
-            // Setup the Screen Capturer
+            // Get screen dimensions
             val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
             val displayMetrics = DisplayMetrics()
             windowManager.defaultDisplay.getMetrics(displayMetrics)
-            val fps = 30
 
-            screenCapturer = createScreenCapturer(data)
-            Log.d(TAG, "[startScreenCapture] ScreenCapturerAndroid created.")
+            // Start capturing
+            screenCapturer?.startCapture(displayMetrics.widthPixels, displayMetrics.heightPixels, 30)
+            Log.d(TAG, "[startScreenCapture] Screen capture started")
 
-            screenCapturer?.initialize(surfaceTextureHelper, context, videoSource!!.capturerObserver)
-            Log.d(TAG, "[startScreenCapture] ScreenCapturerAndroid initialized.")
-
-            screenCapturer?.startCapture(displayMetrics.widthPixels, displayMetrics.heightPixels, fps)
-            Log.d(TAG, "[startScreenCapture] ScreenCapturerAndroid capture started.")
-
-            // Create PeerConnection (AFTER media is ready)
-            // videoSource and localVideoTrack member variables are now guaranteed non-null
+            // Create the peer connection
             createPeerConnection(fromId)
-            Log.d(TAG, "[startScreenCapture] Peer connection creation process finished.")
-
-            // Check for buffered offers
-            peerConnection?.let {
-                Log.d(TAG, "[startScreenCapture] PeerConnection successfully created. Checking for buffered offer...")
-                if (bufferedRemoteOffer != null && bufferedOfferFromId != null) {
-                    Log.i(TAG, "[startScreenCapture] Found buffered offer, scheduling processing...")
-
-                    // Important delay to give PeerConnection time to initialize internal state
-                    android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                        processBufferedOffer()
-                    }, 500)
-                } else {
-                    Log.d(TAG, "[startScreenCapture] No buffered offer found.")
-                }
-            }
-
-            // Process any buffered offers
-            processBufferedOffer()
+            Log.d(TAG, "[startScreenCapture] Peer connection created")
 
         } catch (e: Exception) {
-            Log.e(TAG, "[startScreenCapture] Error during setup: ${e.message}", e)
-            // Cleanup partially created resources if exception occurred
-            if (tempLocalVideoTrack == null) videoSource?.dispose() // Dispose source if track failed
-            videoSource = null
-            localVideoTrack = null // Ensure members are null on failure
-            surfaceTextureHelper?.dispose(); surfaceTextureHelper = null
-            screenCapturer?.stopCapture(); screenCapturer = null // Stop capturer if started
-            stopScreenCapture() // Call general cleanup just in case
-            isCapturing = false
-            // Re-throw specific exception or a general one
-            throw IllegalStateException("Failed to initialize screen capture components: ${e.message}", e)
+            Log.e(TAG, "[startScreenCapture] Error: ${e.message}", e)
+            stopScreenCapture()
+            throw IllegalStateException("Failed to start screen capture: ${e.message}", e)
         }
     }
 
@@ -211,186 +166,136 @@ class WebRTCService @Inject constructor(
     // Create and setup PeerConnection
     @SuppressLint("SuspiciousIndentation")
     fun createPeerConnection(remotePeerId: String) {
-        if (peerConnectionFactory == null) { Log.e(TAG, "[createPeerConnection] Factory is null."); return }
-        if (peerConnection != null) { Log.w(TAG, "[createPeerConnection] Closing existing PC."); peerConnection?.close(); peerConnection = null }
+        currentPeerId = remotePeerId
 
-        // Ensure Track Exists BEFORE creating PC
-        if (localVideoTrack == null) {
-            Log.e(TAG, "[createPeerConnection] CRITICAL: localVideoTrack is null. Aborting PC creation.")
+        if (peerConnectionFactory == null) {
+            Log.e(TAG, "[createPeerConnection] Factory is null.")
             return
         }
 
-        Log.d(TAG, "[createPeerConnection] Creating PeerConnection object...")
-        val rtcConfig = PeerConnection.RTCConfiguration(iceServers)
-        rtcConfig.sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
+        if (peerConnection != null) {
+            Log.w(TAG, "[createPeerConnection] Closing existing PC.")
+            peerConnection?.close()
+            peerConnection = null
+        }
+
+        // Ensure video track is ready
+        if (localVideoTrack == null) {
+            Log.e(TAG, "[createPeerConnection] Video track is not ready, cannot create peer connection")
+            return
+        }
+
+        Log.d(TAG, "[createPeerConnection] Creating PeerConnection for $remotePeerId")
+        val rtcConfig = PeerConnection.RTCConfiguration(iceServers).apply {
+            sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
+            //enableDtlsSrtp = true
+        }
 
         peerConnection = peerConnectionFactory?.createPeerConnection(rtcConfig, object : PeerConnection.Observer {
             override fun onSignalingChange(signalingState: PeerConnection.SignalingState) {
                 Log.d(TAG, "[Observer] onSignalingChange: $signalingState")
             }
+
             override fun onIceConnectionChange(iceConnectionState: PeerConnection.IceConnectionState) {
                 Log.d(TAG, "[Observer] onIceConnectionChange: $iceConnectionState")
                 if (iceConnectionState == PeerConnection.IceConnectionState.FAILED ||
                     iceConnectionState == PeerConnection.IceConnectionState.DISCONNECTED ||
-                    iceConnectionState == PeerConnection.IceConnectionState.CLOSED ) {
-                    Log.e(TAG, "[Observer] Peer connection state changed to $iceConnectionState.")
+                    iceConnectionState == PeerConnection.IceConnectionState.CLOSED) {
+                    Log.e(TAG, "[Observer] ICE connection failed: $iceConnectionState")
                 }
             }
+
             override fun onIceGatheringChange(iceGatheringState: PeerConnection.IceGatheringState) {
                 Log.d(TAG, "[Observer] onIceGatheringChange: $iceGatheringState")
             }
+
             override fun onIceCandidate(iceCandidate: IceCandidate) {
-                Log.d(TAG, "[Observer] Local ICE Candidate generated.")
+                Log.d(TAG, "[Observer] ICE candidate generated: ${iceCandidate.sdpMid}:${iceCandidate.sdpMLineIndex}")
                 sendIceCandidate(iceCandidate, remotePeerId)
             }
+
             override fun onAddTrack(receiver: RtpReceiver, mediaStreams: Array<out MediaStream>) {
                 Log.d(TAG, "[Observer] onAddTrack: ${receiver.track()?.kind()}")
             }
+
             override fun onDataChannel(dataChannel: DataChannel) {
                 Log.d(TAG, "[Observer] onDataChannel: ${dataChannel.label()}")
             }
+
             override fun onRenegotiationNeeded() {
                 Log.d(TAG, "[Observer] onRenegotiationNeeded")
             }
+
             override fun onIceConnectionReceivingChange(receiving: Boolean) {}
             override fun onIceCandidatesRemoved(iceCandidates: Array<out IceCandidate>) {}
             override fun onAddStream(mediaStream: MediaStream) {}
             override fun onRemoveStream(mediaStream: MediaStream) {}
         })
 
-        // Add Track (AFTER PC object created)
+        // Add track to the peer connection
         if (peerConnection != null) {
-            Log.d(TAG, "[createPeerConnection] PeerConnection created successfully. Adding track...")
-            // localVideoTrack is known to be non-null here from the check above
-            val sender = peerConnection?.addTrack(localVideoTrack!!, listOf("ARDAMS")) // Use non-null assertion
-
+            val sender = peerConnection?.addTrack(localVideoTrack!!, listOf("ARDAMS"))
             if (sender != null) {
-                Log.d(TAG, "[createPeerConnection] Local video track added successfully (Sender ID: ${sender.id()}). PC State: ${peerConnection?.signalingState()}")
+                Log.d(TAG, "[createPeerConnection] Video track added successfully")
             } else {
-                Log.e(TAG, "[createPeerConnection] Failed to add local video track (addTrack returned null).")
-                peerConnection?.close() // Close unusable PC
+                Log.e(TAG, "[createPeerConnection] Failed to add video track")
+                peerConnection?.close()
                 peerConnection = null
             }
         } else {
-            Log.e(TAG, "[createPeerConnection] Failed to create PeerConnection object (createPeerConnection returned null).")
+            Log.e(TAG, "[createPeerConnection] Failed to create peer connection")
         }
     }
 
-    // Process any buffered SDP offers
-    private fun processBufferedOffer() {
-        Log.d(TAG, "[processBufferedOffer] BUFFERING DEBUG:")
-        Log.d(TAG, "   PeerConnection: ${if (peerConnection != null) "EXISTS" else "NULL"}")
-        Log.d(TAG, "   BufferedRemoteOffer: ${if (bufferedRemoteOffer != null) "EXISTS" else "NULL"}")
-        Log.d(TAG, "   BufferedOfferFromId: $bufferedOfferFromId")
-        if (peerConnection != null) {
-            Log.d(TAG, "   PeerConnection state: ${peerConnection?.signalingState()}")
-        }
-
-        if (peerConnection != null && bufferedRemoteOffer != null && bufferedOfferFromId != null) {
-            Log.i(TAG, "[processBufferedOffer] Processing buffered offer from ${bufferedOfferFromId} (State: ${peerConnection?.signalingState()})")
-
-            // IMPORTANT - save copies before resetting
-            val offerToProcess = bufferedRemoteOffer
-            val fromIdToProcess = bufferedOfferFromId
-
-            // Reset buffers
-            bufferedRemoteOffer = null
-            bufferedOfferFromId = null
-
-            // Call handler with copies
-            android.os.Handler(android.os.Looper.getMainLooper()).post {
-                Log.d(TAG, "[processBufferedOffer] Now calling handleRemoteSessionDescription...")
-                handleRemoteSessionDescription(
-                    offerToProcess!!.type.canonicalForm(),
-                    offerToProcess.description,
-                    fromIdToProcess!!
-                )
-            }
-        } else {
-            if (peerConnection == null) {
-                Log.w(TAG, "[processBufferedOffer] Cannot process buffered offer, PeerConnection is null.")
-            } else if (bufferedRemoteOffer == null) {
-                Log.d(TAG, "[processBufferedOffer] No buffered offer to process.")
-            }
-        }
-    }
-
-    // Handle incoming ICE candidates
-    /*fun handleRemoteIceCandidate(candidate: String, sdpMid: String, sdpMLineIndex: Int) {
-        Log.d(TAG, "[handleRemoteIceCandidate] Adding remote candidate.")
-        if (peerConnection == null) { Log.w(TAG, "PC is null, cannot add ICE candidate."); return; }
-        val iceCandidate = IceCandidate(sdpMid, sdpMLineIndex, candidate)
-        peerConnection?.addIceCandidate(iceCandidate)
-    }*/
-    // Add this as a class variable
-    private val bufferedIceCandidates = mutableListOf<IceCandidate>()
-
-    fun handleRemoteIceCandidate(candidate: String, sdpMid: String, sdpMLineIndex: Int) {
-        Log.d(TAG, "[handleRemoteIceCandidate] Adding remote candidate.")
-        val iceCandidate = IceCandidate(sdpMid, sdpMLineIndex, candidate)
-
-        if (peerConnection == null) {
-            Log.d(TAG, "PC is null, buffering ICE candidate for later.")
-            bufferedIceCandidates.add(iceCandidate)
-            return
-        }
-
-        peerConnection?.addIceCandidate(iceCandidate)
-    }
-
-    // Add this function to process buffered candidates after the PeerConnection is created
-    fun processPendingIceCandidates() {
-        if (peerConnection != null && bufferedIceCandidates.isNotEmpty()) {
-            Log.d(TAG, "Processing ${bufferedIceCandidates.size} buffered ICE candidates")
-            bufferedIceCandidates.forEach { candidate ->
-                peerConnection?.addIceCandidate(candidate)
-            }
-            bufferedIceCandidates.clear()
-        }
-    }
-
-    // Handle incoming SDP offers/answers
+    // Handle incoming SDP offers/answers - SIMPLIFIED VERSION
     fun handleRemoteSessionDescription(type: String, sdp: String, fromId: String) {
-        Log.d(TAG, "[handleRemoteSDP] Processing $type from $fromId")
+        Log.d(TAG, "[handleRemoteSDP] Received $type from $fromId")
 
-        // Get type from payload if it exists
-        val effectiveType = if (type.equals("offer", ignoreCase = true) ||
-            type.equals("answer", ignoreCase = true)) {
-            type
-        } else {
-            "offer" // Default if not specified
+        // Store peer ID
+        currentPeerId = fromId
+
+        // Parse the type
+        val sdpType = when {
+            type.equals("offer", ignoreCase = true) -> SessionDescription.Type.OFFER
+            type.equals("answer", ignoreCase = true) -> SessionDescription.Type.ANSWER
+            else -> {
+                Log.e(TAG, "[handleRemoteSDP] Invalid SDP type: $type")
+                return
+            }
         }
 
-        val canonicalType = SessionDescription.Type.fromCanonicalForm(effectiveType)
-        val sessionDescription = SessionDescription(canonicalType, sdp)
+        // Create session description object
+        val sessionDescription = SessionDescription(sdpType, sdp)
 
-        // Buffering logic
+        // Check if peer connection exists
         if (peerConnection == null) {
-            Log.w(TAG, "[handleRemoteSDP] PeerConnection not ready. Buffering $type from $fromId")
-            if (type.equals("offer", ignoreCase = true)) {
-                bufferedRemoteOffer = sessionDescription
-                bufferedOfferFromId = fromId
-                Log.d(TAG, "[handleRemoteSDP] SDP offer buffered for later processing!")
-            }
+            Log.e(TAG, "[handleRemoteSDP] Peer connection not available, cannot process $type")
             return
         }
 
+        // Get current signaling state
         val currentState = peerConnection?.signalingState()
-        Log.d(TAG, "[handleRemoteSDP] Setting remote $type (current state: $currentState)")
+        Log.d(TAG, "[handleRemoteSDP] Current signaling state: $currentState")
 
+        // Set the remote description
         peerConnection?.setRemoteDescription(object : SdpObserver {
             override fun onSetSuccess() {
-                val newState = peerConnection?.signalingState()
-                Log.d(TAG, "[handleRemoteSDP] Remote SDP set successfully! New state: $newState")
+                Log.d(TAG, "[handleRemoteSDP] Remote description set successfully")
 
-                if (type.equals("offer", ignoreCase = true)) {
-                    // IMPORTANT: Immediately respond to offer after successfully setting remote description
-                    Log.d(TAG, "[handleRemoteSDP] Creating answer immediately...")
-                    android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                        createAndSendAnswer(fromId)
-                    }, 300)  // Small delay for stability
+                // Process any pending ICE candidates
+                if (pendingIceCandidates.isNotEmpty()) {
+                    Log.d(TAG, "[handleRemoteSDP] Processing ${pendingIceCandidates.size} pending ICE candidates")
+                    pendingIceCandidates.forEach { candidate ->
+                        peerConnection?.addIceCandidate(candidate)
+                    }
+                    pendingIceCandidates.clear()
                 }
-                processPendingIceCandidates()
+
+                // If this was an offer, create an answer
+                if (sdpType == SessionDescription.Type.OFFER) {
+                    Log.d(TAG, "[handleRemoteSDP] Creating answer in response to offer")
+                    createAndSendAnswer(fromId)
+                }
             }
 
             override fun onSetFailure(error: String?) {
@@ -402,53 +307,49 @@ class WebRTCService @Inject constructor(
         }, sessionDescription)
     }
 
-    // Create and send SDP offer to web client
-    fun createAndSendOffer(toId: String) {
-        if (peerConnection == null) {
-            Log.e(TAG, "[createOffer] PC is null.")
+    // Handle incoming ICE candidates - SIMPLIFIED VERSION
+    fun handleRemoteIceCandidate(candidate: String, sdpMid: String, sdpMLineIndex: Int) {
+        Log.d(TAG, "[handleRemoteIceCandidate] Received ICE candidate: $sdpMid:$sdpMLineIndex")
+
+        val iceCandidate = IceCandidate(sdpMid, sdpMLineIndex, candidate)
+
+        // If peer connection isn't ready or remote description isn't set, store candidate
+        if (peerConnection == null || peerConnection?.remoteDescription == null) {
+            Log.d(TAG, "[handleRemoteIceCandidate] Storing ICE candidate for later")
+            pendingIceCandidates.add(iceCandidate)
             return
         }
 
-        val currentState = peerConnection?.signalingState()
-        if (currentState != PeerConnection.SignalingState.STABLE) {
-            Log.e(TAG, "[createOffer] Cannot create offer. Invalid state: $currentState")
-            return
-        }
-
-        Log.d(TAG, "[createOffer] Creating offer for $toId...")
-        peerConnection?.createOffer(object : SdpObserver {
-            override fun onCreateSuccess(sdp: SessionDescription) {
-                Log.d(TAG, "[createOffer] Offer created successfully.")
-                setLocalDescriptionAndSend(sdp, toId)
-            }
-
-            override fun onCreateFailure(error: String) {
-                Log.e(TAG, "[createOffer] Offer creation failed: $error")
-            }
-
-            override fun onSetSuccess() {}
-            override fun onSetFailure(error: String?) {}
-        }, peerConnectionConstraints)
+        // Add the candidate
+        peerConnection?.addIceCandidate(iceCandidate)
+        Log.d(TAG, "[handleRemoteIceCandidate] ICE candidate added")
     }
 
-    // Create and send SDP answer
+    // Create and send answer - SIMPLIFIED VERSION
     fun createAndSendAnswer(toId: String) {
         if (peerConnection == null) {
-            Log.e(TAG, "[createAndSendAnswer] PeerConnection is null, cannot create answer!")
+            Log.e(TAG, "[createAndSendAnswer] Peer connection not available")
             return
         }
 
-        val currentState = peerConnection?.signalingState()
-        Log.d(TAG, "[createAndSendAnswer] Creating answer, current state: $currentState")
+        val signalingState = peerConnection?.signalingState()
+        Log.d(TAG, "[createAndSendAnswer] Current signaling state: $signalingState")
 
+        // Only create answer if we have a remote offer
+        if (signalingState != PeerConnection.SignalingState.HAVE_REMOTE_OFFER) {
+            Log.e(TAG, "[createAndSendAnswer] Cannot create answer in state: $signalingState")
+            return
+        }
+
+        Log.d(TAG, "[createAndSendAnswer] Creating answer...")
         peerConnection?.createAnswer(object : SdpObserver {
             override fun onCreateSuccess(sdp: SessionDescription) {
-                Log.d(TAG, "[createAndSendAnswer] Answer created successfully!")
+                Log.d(TAG, "[createAndSendAnswer] Answer created successfully")
 
-                // Immediately set local description
+                // Set as local description
                 peerConnection?.setLocalDescription(object : SdpObserver {
                     override fun onSetSuccess() {
-                        Log.d(TAG, "[createAndSendAnswer] Local SDP set, sending answer to $toId")
+                        Log.d(TAG, "[createAndSendAnswer] Local description set, sending answer")
                         sendSdp(sdp, toId)
                     }
 
@@ -470,25 +371,11 @@ class WebRTCService @Inject constructor(
         }, peerConnectionConstraints)
     }
 
-    private fun setLocalDescriptionAndSend(sdp: SessionDescription, toId: String) {
-        if (peerConnection == null) { Log.e(TAG, "[setLocalSDP] PC is null."); return; }
-        Log.d(TAG, "[setLocalSDP] Setting local ${sdp.type}...")
-        peerConnection?.setLocalDescription(object : SdpObserver {
-            override fun onSetSuccess() {
-                Log.d(TAG, "[setLocalSDP] Local SDP (${sdp.type}) set successfully. PC State: ${peerConnection?.signalingState()}")
-                sendSdp(sdp, toId)
-            }
-            override fun onSetFailure(error: String?) { Log.e(TAG, "[setLocalSDP] Error setting local SDP (${sdp.type}): $error") }
-            override fun onCreateSuccess(p0: SessionDescription?) {}
-            override fun onCreateFailure(p0: String?) {}
-        }, sdp)
-    }
-
-    // Send SDP offer/answer to peer
+    // Send SDP to peer - SIMPLIFIED VERSION
     private fun sendSdp(sdp: SessionDescription, toId: String) {
         val deviceId = Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID)
 
-        // Proper SDP message format
+        // Create payload
         val payload = JSONObject().apply {
             put("type", sdp.type.canonicalForm())
             put("sdp", sdp.description)
@@ -501,18 +388,20 @@ class WebRTCService @Inject constructor(
             put("payload", payload)
         }
 
-        Log.i(TAG, "[sendSdp] Sending ${sdp.type.canonicalForm()} to $toId")
+        Log.d(TAG, "[sendSdp] Sending ${sdp.type.canonicalForm()} to $toId")
+
+        // Send via WebSocket
         coroutineScope.launch {
             try {
                 webSocketService.sendRawMessage(message.toString())
-                Log.d(TAG, "[sendSdp] Message sent successfully!")
+                Log.d(TAG, "[sendSdp] Message sent successfully")
             } catch (e: Exception) {
-                Log.e(TAG, "[sendSdp] Error sending message", e)
+                Log.e(TAG, "[sendSdp] Failed to send message: ${e.message}")
             }
         }
     }
 
-    // Send ICE candidate to peer
+    // Send ICE candidate to peer - SIMPLIFIED VERSION
     private fun sendIceCandidate(iceCandidate: IceCandidate, toId: String) {
         val deviceId = Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID)
 
@@ -523,119 +412,112 @@ class WebRTCService @Inject constructor(
         }
 
         val message = JSONObject().apply {
-            put("type", "ice-candidate") // Use correct message type
+            put("type", "ice-candidate")
             put("fromId", deviceId)
             put("toId", toId)
             put("payload", payload)
         }
 
-        Log.d(TAG, "[sendIceCandidate] Sending candidate to $toId")
+        Log.d(TAG, "[sendIceCandidate] Sending ICE candidate to $toId")
+
         coroutineScope.launch {
             try {
                 webSocketService.sendRawMessage(message.toString())
-                Log.d(TAG, "[sendIceCandidate] Message sent successfully.")
+                Log.d(TAG, "[sendIceCandidate] ICE candidate sent")
             } catch (e: Exception) {
-                Log.e(TAG, "[sendIceCandidate] Error sending message via WebSocket", e)
+                Log.e(TAG, "[sendIceCandidate] Failed to send ICE candidate: ${e.message}")
             }
         }
     }
 
-    // Stop screen capture and clean up resources
+    // Get current signaling state
+    fun getSignalingState(): PeerConnection.SignalingState? {
+        return peerConnection?.signalingState()
+    }
+
+    // Stop screen capture and clean up - SIMPLIFIED VERSION
     fun stopScreenCapture() {
-        Log.d(TAG, "[stopScreenCapture] Attempting... isCapturing: $isCapturing")
+        Log.d(TAG, "[stopScreenCapture] Stopping screen capture")
 
-        // Clear any pending offer immediately
-        bufferedRemoteOffer = null
-        bufferedOfferFromId = null
-
-        // Stop Capturer
+        // Stop capturer
         try {
             screenCapturer?.stopCapture()
-            Log.d(TAG, "[stopScreenCapture] Capturer stopCapture() called.")
         } catch (e: Exception) {
-            Log.e(TAG, "[stopScreenCapture] Error stopping screen capturer", e)
+            Log.e(TAG, "[stopScreenCapture] Error stopping capturer: ${e.message}")
         } finally {
             screenCapturer = null
         }
 
-        // Dispose Video Track
+        // Clean up video track
         try {
             localVideoTrack?.dispose()
-            Log.d(TAG, "[stopScreenCapture] Local video track disposed.")
         } catch (e: Exception) {
-            Log.e(TAG, "[stopScreenCapture] Error disposing local video track", e)
+            Log.e(TAG, "[stopScreenCapture] Error disposing video track: ${e.message}")
         } finally {
             localVideoTrack = null
         }
 
-        // Dispose Video Source
+        // Clean up video source
         try {
             videoSource?.dispose()
-            Log.d(TAG, "[stopScreenCapture] Video source disposed.")
         } catch (e: Exception) {
-            Log.e(TAG, "[stopScreenCapture] Error disposing video source", e)
+            Log.e(TAG, "[stopScreenCapture] Error disposing video source: ${e.message}")
         } finally {
             videoSource = null
         }
 
-        // Dispose Surface Texture Helper
+        // Clean up surface texture helper
         try {
             surfaceTextureHelper?.dispose()
-            Log.d(TAG, "[stopScreenCapture] SurfaceTextureHelper disposed.")
         } catch (e: Exception) {
-            Log.e(TAG, "[stopScreenCapture] Error disposing SurfaceTextureHelper", e)
+            Log.e(TAG, "[stopScreenCapture] Error disposing surface texture helper: ${e.message}")
         } finally {
             surfaceTextureHelper = null
         }
 
-        // Close Peer Connection
+        // Close peer connection
         try {
             peerConnection?.close()
-            Log.d(TAG,"[stopScreenCapture] PeerConnection closed.")
         } catch (e: Exception) {
-            Log.e(TAG,"[stopScreenCapture] Error closing PeerConnection", e)
+            Log.e(TAG, "[stopScreenCapture] Error closing peer connection: ${e.message}")
         } finally {
             peerConnection = null
         }
 
-        // Reset State
+        // Clear pending ICE candidates
+        pendingIceCandidates.clear()
+
+        // Reset state
         isCapturing = false
         resultCode = null
-        Log.d(TAG, "[stopScreenCapture] Cleanup finished. isCapturing: $isCapturing")
+        Log.d(TAG, "[stopScreenCapture] Screen capture stopped")
     }
 
-    // Release all resources
+    // Release all resources - SIMPLIFIED VERSION
     fun release() {
-        Log.i(TAG, "[release] Releasing resources...")
-        bufferedRemoteOffer = null
-        bufferedOfferFromId = null
+        Log.d(TAG, "[release] Releasing all resources")
 
-        stopScreenCapture() // Calls cleanup
+        // Stop screen capture (this also cleans up peer connection)
+        stopScreenCapture()
 
-        if (peerConnectionFactory != null) {
-            try {
-                peerConnectionFactory?.dispose()
-                Log.d(TAG, "[release] PeerConnectionFactory disposed.")
-            } catch (e: Exception) {
-                Log.e(TAG, "[release] Error disposing PeerConnectionFactory", e)
-            } finally {
-                peerConnectionFactory = null
-            }
+        // Clean up factory
+        try {
+            peerConnectionFactory?.dispose()
+        } catch (e: Exception) {
+            Log.e(TAG, "[release] Error disposing factory: ${e.message}")
+        } finally {
+            peerConnectionFactory = null
         }
 
-        if (rootEglBase != null) {
-            try {
-                rootEglBase!!.release()
-                Log.d(TAG,"[release] EglBase released.")
-            } catch (e: Exception) {
-                Log.e(TAG,"[release] Error releasing EglBase", e)
-            } finally {
-                rootEglBase = null
-            }
+        // Release EGL base
+        try {
+            rootEglBase?.release()
+        } catch (e: Exception) {
+            Log.e(TAG, "[release] Error releasing EGL: ${e.message}")
+        } finally {
+            rootEglBase = null
         }
 
-        Log.i(TAG, "[release] Finished.")
+        Log.d(TAG, "[release] All resources released")
     }
-
-    interface AppIdProvider { fun getDeviceId(): String }
 }
