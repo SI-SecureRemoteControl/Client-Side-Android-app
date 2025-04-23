@@ -1,5 +1,6 @@
 package ba.unsa.etf.si.secureremotecontrol
 
+import NotificationPermissionHandler
 import android.widget.Toast
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
@@ -23,11 +24,16 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import ba.unsa.etf.si.secureremotecontrol.presentation.main.MainViewModel
 import ba.unsa.etf.si.secureremotecontrol.presentation.main.SessionState
+import android.provider.Settings
+import android.content.Intent
+import android.util.Log
 
-@Composable
+/*@Composable
 fun MainScreen(
     viewModel: MainViewModel = hiltViewModel(),
-    onDeregister: () -> Unit
+    onDeregister: () -> Unit,
+    onStartScreenCapture: (callback: (resultCode: Int, data: Intent) -> Unit) -> Unit,
+    onStopScreenCapture: () -> Unit
 ) {
     val sessionState by viewModel.sessionState.collectAsState()
     var buttonEnabled by remember { mutableStateOf(true) }
@@ -51,6 +57,16 @@ fun MainScreen(
                         Button(onClick = {
                             showDialog = false
                             viewModel.sendSessionFinalConfirmation(true) // User accepted
+                            onStartScreenCapture { resultCode, data ->
+                                val fromId = Settings.Secure.getString(
+                                    context.contentResolver,
+                                    Settings.Secure.ANDROID_ID
+                                )
+                                Log.d("MainScreen", "MainScreen je problem: $resultCode, data: $data, fromId: $fromId")
+                                viewModel.startStreaming(resultCode, data, fromId)
+                                //resultCode = 0
+                                //data.replaceExtras(null)
+                            }
                         }) {
                             Text("Yes")
                         }
@@ -59,6 +75,7 @@ fun MainScreen(
                         Button(onClick = {
                             showDialog = false
                             viewModel.sendSessionFinalConfirmation(false) // User rejected
+
                         }) {
                             Text("No")
                         }
@@ -102,7 +119,10 @@ fun MainScreen(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            Button(onClick = { viewModel.disconnectSession() }) {
+            Button(onClick = {
+                viewModel.disconnectSession() // Disconnect the session
+                onStopScreenCapture() // Stop screen sharing
+            }) {
                 Text("Disconnect")
             }
         } else {
@@ -110,6 +130,148 @@ fun MainScreen(
                 onClick = {
                     buttonEnabled = false
                     viewModel.requestSession()
+                },
+                enabled = buttonEnabled
+            ) {
+                Text("Request Session")
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Button(
+                onClick = { viewModel.stopObservingMessages(); onDeregister() },
+                enabled = buttonEnabled
+            ) {
+                Text("Deregister Device")
+            }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        when (sessionState) {
+            is SessionState.Idle -> {
+                buttonEnabled = true
+            }
+            is SessionState.Requesting -> Text("Requesting session...")
+            is SessionState.Timeout -> {
+                Text("Session request timed out.")
+                buttonEnabled = true
+            }
+            is SessionState.Accepted -> Text("Session accepted!")
+            is SessionState.Waiting -> Text("Waiting for response...")
+            is SessionState.Rejected -> {
+                Text("Session rejected.")
+                buttonEnabled = true
+            }
+            is SessionState.Error -> {
+                val errorMessage = (sessionState as SessionState.Error).message
+                Toast.makeText(context, errorMessage, Toast.LENGTH_LONG).show()
+                buttonEnabled = true
+                viewModel.resetSessionState()
+            }
+            else -> {}
+        }
+    }
+}*/
+@Composable
+fun MainScreen(
+    viewModel: MainViewModel = hiltViewModel(),
+    onDeregister: () -> Unit,
+    onStartScreenCapture: (callback: (resultCode: Int, data: Intent) -> Unit) -> Unit,
+    onStopScreenCapture: () -> Unit
+) {
+    val sessionState by viewModel.sessionState.collectAsState()
+    var buttonEnabled by remember { mutableStateOf(true) }
+    val context = LocalContext.current
+    val notificationPermissionHandler = remember { NotificationPermissionHandler(context) }
+
+    when (sessionState) {
+        is SessionState.Rejected -> {
+            Toast.makeText(context, "Session request rejected.", Toast.LENGTH_LONG).show()
+            viewModel.resetSessionState()
+        }
+        is SessionState.Accepted -> {
+            var showDialog by remember { mutableStateOf(true) }
+
+            if (showDialog) {
+                AlertDialog(
+                    onDismissRequest = { showDialog = false },
+                    title = { Text("Confirm Session") },
+                    text = { Text("Do you want to confirm the session?") },
+                    confirmButton = {
+                        Button(onClick = {
+                            showDialog = false
+                            viewModel.sendSessionFinalConfirmation(true) // User accepted
+                            onStartScreenCapture { resultCode, data ->
+                                val fromId = Settings.Secure.getString(
+                                    context.contentResolver,
+                                    Settings.Secure.ANDROID_ID
+                                )
+                                viewModel.startStreaming(resultCode, data, fromId)
+                            }
+                        }) {
+                            Text("Yes")
+                        }
+                    },
+                    dismissButton = {
+                        Button(onClick = {
+                            showDialog = false
+                            viewModel.sendSessionFinalConfirmation(false) // User rejected
+                        }) {
+                            Text("No")
+                        }
+                    }
+                )
+            }
+        }
+        else -> {}
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Text(
+            text = "Secure Remote Control",
+            style = MaterialTheme.typography.headlineMedium,
+            color = MaterialTheme.colorScheme.primary,
+            fontWeight = FontWeight.Bold,
+        )
+
+        Spacer(modifier = Modifier.height(64.dp))
+
+        if (sessionState is SessionState.Connected) {
+            Text("Connected", style = MaterialTheme.typography.bodyLarge)
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Button(onClick = {
+                viewModel.disconnectSession() // Disconnect the session
+                onStopScreenCapture() // Stop screen sharing
+            }) {
+                Text("Disconnect")
+            }
+        } else {
+            Button(
+                onClick = {
+                    if (notificationPermissionHandler.isNotificationPermissionGranted()) {
+                        buttonEnabled = false
+                        viewModel.requestSession()
+                    } else {
+                        Toast.makeText(
+                            context,
+                            "Notifications are not allowed. Please enable them in settings.",
+                            Toast.LENGTH_LONG
+                        ).show()
+                        // Open notification settings
+                        val intent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).apply {
+                            putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+                        }
+                        context.startActivity(intent)
+                    }
                 },
                 enabled = buttonEnabled
             ) {

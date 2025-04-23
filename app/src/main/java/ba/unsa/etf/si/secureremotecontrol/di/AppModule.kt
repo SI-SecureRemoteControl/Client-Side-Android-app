@@ -58,4 +58,9 @@ object AppModule {
     ): WebSocketService {
         return WebSocketServiceImpl(client, gson)
     }
+    @Provides
+    @Singleton
+    fun provideContext(@ApplicationContext context: Context): Context {
+        return context
+    }
 }

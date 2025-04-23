@@ -18,19 +18,30 @@ import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 import javax.inject.Inject
+import ba.unsa.etf.si.secureremotecontrol.data.webrtc.WebRTCManager
+import android.content.Intent
+import android.os.Build
+import androidx.annotation.RequiresApi
+import androidx.lifecycle.LifecycleOwner
+import ba.unsa.etf.si.secureremotecontrol.service.ScreenSharingService
+import org.json.JSONException
 
 @HiltViewModel
 class MainViewModel @Inject constructor(
     private val webSocketService: WebSocketService,
     private val apiService: ApiService,
     @ApplicationContext private val context: Context,
-    private val tokenDataStore: TokenDataStore
+    private val tokenDataStore: TokenDataStore,
+    private val webRTCManager: WebRTCManager
 ) : ViewModel() {
+
+    private val TAG = "MainViewModel"
 
     private val _sessionState = MutableStateFlow<SessionState>(SessionState.Idle)
     val sessionState: StateFlow<SessionState> = _sessionState
 
     private var messageObservationJob: Job? = null
+    private var timeoutJob: Job? = null
 
     init {
         connectAndObserveMessages()
@@ -42,13 +53,11 @@ class MainViewModel @Inject constructor(
                 webSocketService.connectWebSocket()
                 observeMessages()
             } catch (e: Exception) {
-                Log.e("MainViewModel", "Failed to connect WebSocket: ${e.localizedMessage}")
+                Log.e(TAG, "Failed to connect WebSocket: ${e.localizedMessage}")
                 _sessionState.value = SessionState.Error("Failed to connect WebSocket")
             }
         }
     }
-
-    private var timeoutJob: Job? = null
 
     fun requestSession() {
         viewModelScope.launch {
@@ -62,7 +71,7 @@ class MainViewModel @Inject constructor(
 
             // Start a timeout job
             timeoutJob = viewModelScope.launch {
-                delay(30000L) // 10 seconds timeout
+                delay(30000L) // 30 seconds timeout
                 if (_sessionState.value == SessionState.Requesting || _sessionState.value == SessionState.Waiting) {
                     _sessionState.value = SessionState.Timeout
                 }
@@ -127,23 +136,173 @@ class MainViewModel @Inject constructor(
     private fun observeMessages() {
         messageObservationJob = viewModelScope.launch {
             webSocketService.observeMessages().collect { message ->
-                val response = JSONObject(message)
-                when (response.getString("type")) {
-                    "info" -> {
-                        _sessionState.value = SessionState.Waiting
+                Log.d(TAG, "Raw message received: $message")
+                try {
+                    val response = JSONObject(message)
+                    val messageType = response.optString("type", "")
+
+                    when (messageType) {
+                        "info" -> {
+                            Log.d(TAG, "Received info message")
+                            _sessionState.value = SessionState.Waiting
+                        }
+                        "error" -> {
+                            val errorMessage = response.optString("message", "Unknown error")
+                            Log.e(TAG, "Received error message: $errorMessage")
+                            _sessionState.value = SessionState.Error(errorMessage)
+                            timeoutJob?.cancel()
+                        }
+                        "approved" -> {
+                            Log.d(TAG, "Received approved message")
+                            _sessionState.value = SessionState.Accepted
+                        }
+                        "rejected" -> {
+                            val reason = response.optString("message", "Session rejected")
+                            Log.w(TAG, "Received rejected message: $reason")
+                            _sessionState.value = SessionState.Rejected
+                        }
+                        "session_confirmed" -> {
+                            Log.d(TAG, "Server confirmed session start.")
+                        }
+                        "offer" -> {
+                            // Critical part - need to distinguish between SDP offers and ICE candidates
+                            val payload = response.optJSONObject("payload")
+                            if (payload != null) {
+                                // Check if this is actually an ICE candidate message
+                                val parsedMessage = payload.optJSONObject("parsedMessage")
+                                if (parsedMessage != null) {
+                                    val innerType = parsedMessage.optString("type", "")
+
+                                    if (innerType == "ice-candidate") {
+                                        // This is actually an ICE candidate
+                                        handleIceCandidate(response)
+                                    } else if (innerType == "offer") {
+                                        // This is a genuine SDP offer
+                                        handleSdpOffer(response)
+                                    } else {
+                                        Log.w(TAG, "Unknown inner message type: $innerType")
+                                    }
+                                } else {
+                                    // Direct structure without parsedMessage
+                                    handleSdpOffer(response)
+                                }
+                            }
+                        }
+                        "ice-candidate" -> {
+                            handleIceCandidate(response)
+                        }
+                        else -> {
+                            Log.d(TAG, "Unhandled message type: $messageType")
+                        }
                     }
-                    "error" -> {
-                        _sessionState.value = SessionState.Error(response.getString("message"))
-                        timeoutJob?.cancel() // Cancel timeout on error
+                } catch (e: JSONException) {
+                    Log.e(TAG, "Failed to parse WebSocket message: $message", e)
+                    _sessionState.value = SessionState.Error("Failed to parse server message")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error processing message: ${e.message}", e)
+                }
+            }
+        }
+    }
+
+    private fun handleSdpOffer(response: JSONObject) {
+        try {
+            val fromId = response.optString("fromId", "unknown_sender")
+            val payload = response.optJSONObject("payload")
+
+            if (payload != null) {
+                val parsedMessage = payload.optJSONObject("parsedMessage")
+
+                if (parsedMessage != null) {
+                    val innerPayload = parsedMessage.optJSONObject("payload")
+
+                    if (innerPayload != null && innerPayload.has("sdp")) {
+                        val sdp = innerPayload.getString("sdp")
+                        Log.d(TAG, "Found SDP in nested payload structure")
+                        webRTCManager.confirmSessionAndStartStreaming(fromId, sdp)
+                        return
                     }
-                    "approved" -> {
-                        _sessionState.value = SessionState.Accepted
+                }
+
+                // Check direct structure just in case
+                if (payload.has("sdp")) {
+                    val sdp = payload.getString("sdp")
+                    Log.d(TAG, "Found SDP directly in payload")
+                    webRTCManager.confirmSessionAndStartStreaming(fromId, sdp)
+                    return
+                }
+            }
+
+            Log.e(TAG, "SDP not found in offer message: $payload")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error handling SDP offer: ${e.message}", e)
+            _sessionState.value = SessionState.Error("Error processing offer: ${e.message}")
+        }
+    }
+
+    private fun handleIceCandidate(response: JSONObject) {
+        try {
+            val fromId = response.optString("fromId", "unknown_sender")
+            val payload = response.optJSONObject("payload")
+
+            if (payload != null) {
+                val parsedMessage = payload.optJSONObject("parsedMessage")
+
+                if (parsedMessage != null) {
+                    val innerPayload = parsedMessage.optJSONObject("payload")
+
+                    if (innerPayload != null) {
+                        val candidate = innerPayload.optString("candidate", "")
+                        val sdpMid = innerPayload.optString("sdpMid", "")
+                        val sdpMLineIndex = innerPayload.optInt("sdpMLineIndex", 0)
+
+                        // Only forward if not an empty candidate
+                        if (candidate.isNotEmpty()) {
+                            Log.d(TAG, "Processing ICE candidate")
+                            try {
+                                webRTCManager.handleRtcMessage("ice-candidate", fromId, innerPayload)
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Error processing ICE candidate", e)
+                            }
+                        } else {
+                            Log.d(TAG, "Received empty ICE candidate (end of candidates)")
+                        }
+                        return
                     }
-                    "rejected" -> {
-                        _sessionState.value = SessionState.Rejected
+                }
+
+                // Check direct structure as well
+                val candidate = payload.optString("candidate", "")
+                if (candidate.isNotEmpty()) {
+                    Log.d(TAG, "Processing ICE candidate from direct payload")
+                    try {
+                        webRTCManager.handleRtcMessage("ice-candidate", fromId, payload)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Error processing direct ICE candidate", e)
                     }
                 }
             }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error handling ICE candidate: ${e.message}", e)
+        }
+    }
+
+    @RequiresApi(Build.VERSION_CODES.O)
+    fun startStreaming(resultCode: Int, data: Intent, fromId: String) {
+        viewModelScope.launch {
+            try {
+                val intent = ScreenSharingService.getStartIntent(context, resultCode, data, fromId)
+                context.startForegroundService(intent)
+                _sessionState.value = SessionState.Streaming
+            } catch (e: Exception) {
+                _sessionState.value = SessionState.Error("Failed to start streaming: ${e.localizedMessage}")
+            }
+        }
+    }
+
+    fun startObservingRtcMessages(lifecycleOwner: LifecycleOwner) {
+        viewModelScope.launch {
+            webRTCManager.startObservingRtcMessages(lifecycleOwner)
         }
     }
 
@@ -156,6 +315,12 @@ class MainViewModel @Inject constructor(
         messageObservationJob?.cancel()
         messageObservationJob = null
     }
+
+    override fun onCleared() {
+        super.onCleared()
+        stopObservingMessages()
+        timeoutJob?.cancel()
+    }
 }
 
 sealed class SessionState {
@@ -167,4 +332,5 @@ sealed class SessionState {
     object Rejected : SessionState()
     object Connected : SessionState()
     data class Error(val message: String) : SessionState()
+    object Streaming : SessionState()
 }
