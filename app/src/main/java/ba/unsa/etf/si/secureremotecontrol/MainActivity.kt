@@ -24,6 +24,7 @@ import kotlinx.coroutines.runBlocking
 import javax.inject.Inject
 import android.provider.Settings
 import ba.unsa.etf.si.secureremotecontrol.data.webrtc.WebRTCManager
+import ba.unsa.etf.si.secureremotecontrol.service.RemoteControlClickService
 import ba.unsa.etf.si.secureremotecontrol.service.ScreenSharingService
 
 @AndroidEntryPoint
@@ -59,9 +60,12 @@ class MainActivity : ComponentActivity() {
                 } else {
                     startService(intent) // For API 24 and 25
                 }
+
             } else {
                 Log.e("MainActivity", "Screen capture permission denied or invalid data.")
             }
+            val intent = Intent(this, RemoteControlClickService::class.java)
+            startService(intent)
         }
         setContent {
             SecureRemoteControlTheme {
