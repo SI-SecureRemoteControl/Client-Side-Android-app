@@ -23,6 +23,7 @@ import android.content.Intent
 import android.os.Build
 import androidx.annotation.RequiresApi
 import androidx.lifecycle.LifecycleOwner
+import ba.unsa.etf.si.secureremotecontrol.service.RemoteControlAccessibilityService
 import ba.unsa.etf.si.secureremotecontrol.service.ScreenSharingService
 import org.json.JSONException
 
@@ -142,6 +143,30 @@ class MainViewModel @Inject constructor(
                     val messageType = response.optString("type", "")
 
                     when (messageType) {
+
+                        "click" -> {
+                            val payload = response.optJSONObject("payload")
+                            val x = payload.getDouble("x").toFloat()
+                            val y = payload.getDouble("y").toFloat()
+                            //redo coordinates cuz relative
+                            val context = RemoteControlAccessibilityService.instance
+
+                            val displayMetrics = context?.resources?.displayMetrics
+                            //val displayMetrics = context?.resources?.displayMetrics
+                            val screenWidth = displayMetrics?.widthPixels ?: 0
+                            val screenHeight = displayMetrics?.heightPixels?.plus(
+                                getNavigationBarHeight(context)
+                            )
+                            //val screenHeight = displayMetrics?.heightPixels ?: 0
+                            Log.d("Dims", "Phone dimens ($screenWidth) ($screenHeight")
+                            val absoluteX = x * screenWidth
+                            val absoluteY = y * screenHeight!! //2376 //screenHeight for OPPO as heightPixels cut off the NavBar
+
+                            context.performClick(absoluteX, absoluteY)
+
+                            Log.d("WebRTCManager", "Received case click at relative ($x, $y), ($absoluteX, $absoluteY)")
+                        }
+
                         "info" -> {
                             Log.d(TAG, "Received info message")
                             _sessionState.value = SessionState.Waiting
@@ -204,6 +229,17 @@ class MainViewModel @Inject constructor(
             }
         }
     }
+
+    fun getNavigationBarHeight(context: Context): Int {
+        val resources = context.resources
+        val resourceId = resources.getIdentifier("navigation_bar_height", "dimen", "android")
+        return if (resourceId > 0) {
+            resources.getDimensionPixelSize(resourceId)
+        } else {
+            0
+        }
+    }
+
 
     private fun handleSdpOffer(response: JSONObject) {
         try {
