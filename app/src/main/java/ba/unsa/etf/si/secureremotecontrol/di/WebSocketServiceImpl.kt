@@ -226,7 +226,7 @@ class WebSocketServiceImpl @Inject constructor(
         }
     }
 
-    fun observeClickEvents(): Flow<Pair<Float, Float>> = observeMessages()
+    override fun observeClickEvents(): Flow<Pair<Float, Float>> = observeMessages()
         .mapNotNull { message ->
             try {
                 val jsonObject = JSONObject(message)
