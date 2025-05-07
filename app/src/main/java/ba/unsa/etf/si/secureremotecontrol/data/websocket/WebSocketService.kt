@@ -15,6 +15,8 @@ interface WebSocketService {
     fun stopHeartbeat()
     fun sendRawMessage(message: String)
     fun observeRtcMessages(): Flow<RtcMessage>
+    fun observeClickEvents(): Flow<Pair<Float, Float>>
+
 }
 
 data class RtcMessage(

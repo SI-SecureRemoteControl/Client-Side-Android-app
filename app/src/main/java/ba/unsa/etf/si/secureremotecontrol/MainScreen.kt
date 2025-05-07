@@ -27,6 +27,7 @@ import ba.unsa.etf.si.secureremotecontrol.presentation.main.SessionState
 import android.provider.Settings
 import android.content.Intent
 import android.util.Log
+import ba.unsa.etf.si.secureremotecontrol.utils.AccessibilityUtils
 
 /*@Composable
 fun MainScreen(
@@ -255,11 +256,45 @@ fun MainScreen(
                 Text("Disconnect")
             }
         } else {
-            Button(
+            /*Button(
                 onClick = {
                     if (notificationPermissionHandler.isNotificationPermissionGranted()) {
                         buttonEnabled = false
                         viewModel.requestSession()
+                    } else {
+                        Toast.makeText(
+                            context,
+                            "Notifications are not allowed. Please enable them in settings.",
+                            Toast.LENGTH_LONG
+                        ).show()
+                        // Open notification settings
+                        val intent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).apply {
+                            putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+                        }
+                        context.startActivity(intent)
+                    }
+                },
+                enabled = buttonEnabled
+            ) {
+                Text("Request Session")
+            }*/
+            Button(
+                onClick = {
+                    if (notificationPermissionHandler.isNotificationPermissionGranted()) {
+                        val serviceClassName = "ba.unsa.etf.si.secureremotecontrol.service.RemoteControlAccessibilityService"
+                        if (AccessibilityUtils.isAccessibilityServiceEnabled(context, serviceClassName)) {
+                            buttonEnabled = false
+                            viewModel.requestSession()
+                        } else {
+                            Toast.makeText(
+                                context,
+                                "Accessibility service is not enabled. Please enable it in settings.",
+                                Toast.LENGTH_LONG
+                            ).show()
+                            // Open accessibility settings
+                            val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                            context.startActivity(intent)
+                        }
                     } else {
                         Toast.makeText(
                             context,

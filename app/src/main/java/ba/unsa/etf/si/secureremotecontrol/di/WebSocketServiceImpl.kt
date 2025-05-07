@@ -19,6 +19,7 @@ import javax.inject.Singleton
 import ba.unsa.etf.si.secureremotecontrol.data.api.RtcMessage
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.mapNotNull
 
 @Singleton
 class WebSocketServiceImpl @Inject constructor(
@@ -224,4 +225,21 @@ class WebSocketServiceImpl @Inject constructor(
             retryConnection("wss://remote-control-gateway-production.up.railway.app/", "deviceId") // Replace with actual URL and device ID
         }
     }
+
+    override fun observeClickEvents(): Flow<Pair<Float, Float>> = observeMessages()
+        .mapNotNull { message ->
+            try {
+                val jsonObject = JSONObject(message)
+                if (jsonObject.getString("type") == "click") {
+                    val payload = jsonObject.getJSONObject("payload")
+                    val x = payload.getDouble("x").toFloat()
+                    val y = payload.getDouble("y").toFloat()
+                    Pair(x, y)
+                } else null
+            } catch (e: Exception) {
+                Log.e("WebSocket", "Error parsing click event", e)
+                null
+            }
+        }
+
 }
