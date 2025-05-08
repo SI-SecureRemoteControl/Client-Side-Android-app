@@ -47,4 +47,27 @@ class RemoteControlAccessibilityService : AccessibilityService() {
             }
         }, null)
     }
+
+    fun performSwipe(startX: Float, startY: Float, endX: Float, endY: Float, duration: Long) {
+        val path = Path().apply {
+            moveTo(startX, startY)
+            lineTo(endX, endY)
+        }
+
+        val gesture = GestureDescription.Builder()
+            .addStroke(GestureDescription.StrokeDescription(path, 0, duration))
+            .build()
+
+        dispatchGesture(gesture, object : GestureResultCallback() {
+            override fun onCompleted(gestureDescription: GestureDescription?) {
+                super.onCompleted(gestureDescription)
+                Log.d("Accessibility", "Swipe performed from ($startX, $startY) to ($endX, $endY)")
+            }
+
+            override fun onCancelled(gestureDescription: GestureDescription?) {
+                super.onCancelled(gestureDescription)
+                Log.d("Accessibility", "Swipe cancelled from ($startX, $startY) to ($endX, $endY)")
+            }
+        }, null)
+    }
 }

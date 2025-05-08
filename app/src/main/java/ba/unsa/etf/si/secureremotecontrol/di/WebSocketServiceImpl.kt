@@ -242,4 +242,22 @@ class WebSocketServiceImpl @Inject constructor(
             }
         }
 
+    fun observeSwipeEvents(): Flow<Triple<Pair<Float, Float>, Pair<Float, Float>, Long>> = observeMessages()
+        .mapNotNull { message ->
+            try {
+                val jsonObject = JSONObject(message)
+                if (jsonObject.getString("type") == "swipe") {
+                    val payload = jsonObject.getJSONObject("payload")
+                    val startX = payload.getDouble("startX").toFloat()
+                    val startY = payload.getDouble("startY").toFloat()
+                    val endX = payload.getDouble("endX").toFloat()
+                    val endY = payload.getDouble("endY").toFloat()
+                    val duration = payload.getLong("duration")
+                    Triple(Pair(startX, startY), Pair(endX, endY), duration)
+                } else null
+            } catch (e: Exception) {
+                Log.e("WebSocket", "Error parsing swipe event", e)
+                null
+            }
+        }
 }
