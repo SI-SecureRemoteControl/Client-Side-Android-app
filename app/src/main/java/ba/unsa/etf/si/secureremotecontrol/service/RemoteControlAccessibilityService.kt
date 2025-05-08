@@ -10,12 +10,13 @@ class RemoteControlAccessibilityService : AccessibilityService() {
 
     companion object {
         var instance: RemoteControlAccessibilityService? = null
+        private const val TAG = "RemoteControlAccessibility"
     }
 
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
-        Log.d("Accessibility", "Service connected.")
+        Log.d(TAG, "Service connected.")
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -23,7 +24,7 @@ class RemoteControlAccessibilityService : AccessibilityService() {
     }
 
     override fun onInterrupt() {
-        Log.d("Accessibility", "Service interrupted.")
+        Log.d(TAG, "Service interrupted.")
     }
 
     fun performClick(x: Float, y: Float) {
@@ -38,12 +39,41 @@ class RemoteControlAccessibilityService : AccessibilityService() {
         dispatchGesture(gesture, object : GestureResultCallback() {
             override fun onCompleted(gestureDescription: GestureDescription?) {
                 super.onCompleted(gestureDescription)
-                Log.d("Accessibility", "Click performed at: ($x, $y)")
+                Log.d(TAG, "Click performed at: ($x, $y)")
             }
 
             override fun onCancelled(gestureDescription: GestureDescription?) {
                 super.onCancelled(gestureDescription)
-                Log.d("Accessibility", "Click cancelled at: ($x, $y)")
+                Log.d(TAG, "Click cancelled at: ($x, $y)")
+            }
+        }, null)
+    }
+
+    fun performSwipe(
+        startX: Float,
+        startY: Float,
+        endX: Float,
+        endY: Float,
+        durationMs: Long
+    ) {
+        val path = Path().apply {
+            moveTo(startX, startY)
+            lineTo(endX, endY)
+        }
+
+        val gesture = GestureDescription.Builder()
+            .addStroke(GestureDescription.StrokeDescription(path, 0, durationMs))
+            .build()
+
+        dispatchGesture(gesture, object : GestureResultCallback() {
+            override fun onCompleted(gestureDescription: GestureDescription?) {
+                super.onCompleted(gestureDescription)
+                Log.d(TAG, "Swipe completed from ($startX, $startY) to ($endX, $endY) with duration $durationMs ms")
+            }
+
+            override fun onCancelled(gestureDescription: GestureDescription?) {
+                super.onCancelled(gestureDescription)
+                Log.d(TAG, "Swipe cancelled from ($startX, $startY) to ($endX, $endY)")
             }
         }, null)
     }
