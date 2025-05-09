@@ -166,6 +166,10 @@ class MainViewModel @Inject constructor(
                             Log.d("WebRTCManager", "Received case click at relative ($x, $y), ($absoluteX, $absoluteY)")
                         }
 
+                        "session_ended" -> {
+                            Log.d(TAG, "Session ended message received")
+                            //handleSessionEnded()
+                        }
                         "swipe" -> {
                             val payload = response.optJSONObject("payload")
                             val startX = payload.getDouble("startX").toFloat()
