@@ -143,7 +143,6 @@ class MainViewModel @Inject constructor(
                     val messageType = response.optString("type", "")
 
                     when (messageType) {
-
                         "click" -> {
                             val payload = response.optJSONObject("payload")
                             val x = payload.getDouble("x").toFloat()
@@ -165,6 +164,53 @@ class MainViewModel @Inject constructor(
                             context.performClick(absoluteX, absoluteY)
 
                             Log.d("WebRTCManager", "Received case click at relative ($x, $y), ($absoluteX, $absoluteY)")
+                        }
+
+                        "swipe" -> {
+                            val payload = response.optJSONObject("payload")
+                            val startX = payload.getDouble("startX").toFloat()
+                            val startY = payload.getDouble("startY").toFloat()
+                            val endX = payload.getDouble("endX").toFloat()
+                            val endY = payload.getDouble("endY").toFloat()
+                            val velocity = payload.optDouble("velocity", 1.0)
+
+                            val context = RemoteControlAccessibilityService.instance
+
+                            val displayMetrics = context?.resources?.displayMetrics
+                            val screenWidth = displayMetrics?.widthPixels ?: 0
+                            val screenHeight = displayMetrics?.heightPixels?.plus(
+                                getNavigationBarHeight(context)
+                            ) ?: 0
+
+                            // Convert relative coordinates to absolute screen coordinates
+                            val absoluteStartX = startX * screenWidth
+                            val absoluteStartY = startY * screenHeight
+                            val absoluteEndX = endX * screenWidth
+                            val absoluteEndY = endY * screenHeight
+
+                            // Calculate the distance of the swipe
+                            val distance = Math.sqrt(
+                                Math.pow((absoluteEndX - absoluteStartX).toDouble(), 2.0) +
+                                        Math.pow((absoluteEndY - absoluteStartY).toDouble(), 2.0)
+                            ).toFloat()
+
+                            // Calculate duration based on velocity and distance
+                            // Lower velocity means longer duration (slower swipe)
+                            // Higher velocity means shorter duration (faster swipe)
+                            // Base duration is scaled inversely by velocity with reasonable limits
+                            val baseDuration = (distance / velocity).toLong()
+                            val durationMs = Math.max(100, Math.min(baseDuration, 800))
+
+                            Log.d(TAG, "Performing swipe from ($absoluteStartX, $absoluteStartY) to " +
+                                    "($absoluteEndX, $absoluteEndY) with duration $durationMs ms")
+
+                            context?.performSwipe(
+                                absoluteStartX,
+                                absoluteStartY,
+                                absoluteEndX,
+                                absoluteEndY,
+                                durationMs
+                            )
                         }
 
                         "info" -> {
