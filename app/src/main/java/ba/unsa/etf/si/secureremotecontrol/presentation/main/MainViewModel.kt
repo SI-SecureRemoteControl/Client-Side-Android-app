@@ -167,6 +167,16 @@ class MainViewModel @Inject constructor(
                             Log.d("WebRTCManager", "Received case click at relative ($x, $y), ($absoluteX, $absoluteY)")
                         }
 
+                        "keyboard" -> {
+                            val payload = response.getJSONObject("payload")
+                            val key = payload.getString("key")
+                            val eventType = payload.getString("type")
+                            if (eventType == "keydown") {
+                                RemoteControlAccessibilityService.instance?.inputCharacter(key)
+                            }
+                        }
+
+
                         "info" -> {
                             Log.d(TAG, "Received info message")
                             _sessionState.value = SessionState.Waiting
