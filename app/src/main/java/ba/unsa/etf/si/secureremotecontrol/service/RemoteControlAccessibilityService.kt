@@ -8,6 +8,8 @@ import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.content.Intent
 import android.os.Bundle
+import kotlin.math.max
+import kotlin.math.min
 
 class RemoteControlAccessibilityService : AccessibilityService() {
 
@@ -20,12 +22,37 @@ class RemoteControlAccessibilityService : AccessibilityService() {
     private var isServiceEnabled = false
     private var currentText = StringBuilder()
     private var lastFocusedNode: AccessibilityNodeInfo? = null
+    private var screenWidth: Int = 0
+    private var screenHeight: Int = 0
 
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
         isServiceEnabled = true
-        Log.d(TAG, "Service connected.")
+        // Get screen dimensions
+        val displayMetrics = resources.displayMetrics
+        screenWidth = displayMetrics.widthPixels
+        screenHeight = displayMetrics.heightPixels + getNavigationBarHeight(this)
+        Log.d(TAG, "Service connected. Screen size: ${screenWidth}x${screenHeight}")
+    }
+
+    private fun getNavigationBarHeight(context: android.content.Context): Int {
+        val resources = context.resources
+        val resourceId = resources.getIdentifier("navigation_bar_height", "dimen", "android")
+        return if (resourceId > 0) {
+            resources.getDimensionPixelSize(resourceId)
+        } else {
+            0
+        }
+    }
+
+    private fun clampToScreen(x: Float, y: Float): Pair<Float, Float> {
+        val clampedX = x.coerceIn(0f, screenWidth.toFloat())
+        val clampedY = y.coerceIn(0f, screenHeight.toFloat())
+        if (clampedX != x || clampedY != y) {
+            Log.d(TAG, "Clamped coordinates from ($x, $y) to ($clampedX, $clampedY)")
+        }
+        return Pair(clampedX, clampedY)
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -62,8 +89,10 @@ class RemoteControlAccessibilityService : AccessibilityService() {
             return
         }
 
+        val (clampedX, clampedY) = clampToScreen(x, y)
+
         val path = Path().apply {
-            moveTo(x, y)
+            moveTo(clampedX, clampedY)
         }
 
         val gesture = GestureDescription.Builder()
@@ -73,12 +102,12 @@ class RemoteControlAccessibilityService : AccessibilityService() {
         dispatchGesture(gesture, object : GestureResultCallback() {
             override fun onCompleted(gestureDescription: GestureDescription?) {
                 super.onCompleted(gestureDescription)
-                Log.d(TAG, "Click performed at: ($x, $y) in package: $currentPackage")
+                Log.d(TAG, "Click performed at: ($clampedX, $clampedY) in package: $currentPackage")
             }
 
             override fun onCancelled(gestureDescription: GestureDescription?) {
                 super.onCancelled(gestureDescription)
-                Log.d(TAG, "Click cancelled at: ($x, $y)")
+                Log.d(TAG, "Click cancelled at: ($clampedX, $clampedY)")
             }
         }, null)
     }
@@ -95,26 +124,46 @@ class RemoteControlAccessibilityService : AccessibilityService() {
             return
         }
 
+        val (clampedStartX, clampedStartY) = clampToScreen(startX, startY)
+        val (clampedEndX, clampedEndY) = clampToScreen(endX, endY)
+
+        // Ensure minimum duration
+        val adjustedDuration = max(durationMs, 100L)
+
         val path = Path().apply {
-            moveTo(startX, startY)
-            lineTo(endX, endY)
+            moveTo(clampedStartX, clampedStartY)
+            lineTo(clampedEndX, clampedEndY)
         }
 
         val gesture = GestureDescription.Builder()
-            .addStroke(GestureDescription.StrokeDescription(path, 0, durationMs))
+            .addStroke(GestureDescription.StrokeDescription(path, 0, adjustedDuration))
             .build()
 
-        dispatchGesture(gesture, object : GestureResultCallback() {
-            override fun onCompleted(gestureDescription: GestureDescription?) {
-                super.onCompleted(gestureDescription)
-                Log.d(TAG, "Swipe completed from ($startX, $startY) to ($endX, $endY)")
-            }
+        var retryCount = 0
+        val maxRetries = 3
 
-            override fun onCancelled(gestureDescription: GestureDescription?) {
-                super.onCancelled(gestureDescription)
-                Log.d(TAG, "Swipe cancelled from ($startX, $startY) to ($endX, $endY)")
-            }
-        }, null)
+        fun attemptGesture() {
+            dispatchGesture(gesture, object : GestureResultCallback() {
+                override fun onCompleted(gestureDescription: GestureDescription?) {
+                    super.onCompleted(gestureDescription)
+                    Log.d(TAG, "Swipe completed from ($clampedStartX, $clampedStartY) to ($clampedEndX, $clampedEndY)")
+                }
+
+                override fun onCancelled(gestureDescription: GestureDescription?) {
+                    super.onCancelled(gestureDescription)
+                    Log.d(TAG, "Swipe cancelled from ($clampedStartX, $clampedStartY) to ($clampedEndX, $clampedEndY)")
+                    if (retryCount < maxRetries) {
+                        retryCount++
+                        Log.d(TAG, "Retrying swipe attempt $retryCount of $maxRetries")
+                        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                            attemptGesture()
+                        }, 100)
+                    }
+                }
+            }, null)
+        }
+
+        attemptGesture()
     }
 
     fun inputCharacter(char: String) {
@@ -154,7 +203,6 @@ class RemoteControlAccessibilityService : AccessibilityService() {
             }
             inputNode.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
 
-            // Move cursor to end
             inputNode.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, Bundle().apply {
                 putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, currentText.length)
                 putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, currentText.length)
