@@ -263,6 +263,21 @@ class MainViewModel @Inject constructor(
                                 }
                             }
                         }
+                        "keyboard" -> {
+                            val payload = response.getJSONObject("payload")
+                            val key = payload.getString("key")
+                            val eventType = payload.getString("type")
+                            if (eventType == "keydown") {
+                                when (key) {
+                                    "Backspace", "Enter" -> RemoteControlAccessibilityService.instance?.inputCharacter(key)
+                                    else -> {
+                                        if (key.length == 1) {
+                                            RemoteControlAccessibilityService.instance?.inputCharacter(key)
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         "ice-candidate" -> {
                             handleIceCandidate(response)
                         }
