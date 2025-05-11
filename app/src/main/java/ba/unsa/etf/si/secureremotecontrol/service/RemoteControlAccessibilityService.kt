@@ -3,10 +3,11 @@ package ba.unsa.etf.si.secureremotecontrol.service
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
 import android.graphics.Path
-import android.os.Bundle
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import android.content.Intent
+import android.os.Bundle
 
 class RemoteControlAccessibilityService : AccessibilityService() {
 
@@ -15,31 +16,38 @@ class RemoteControlAccessibilityService : AccessibilityService() {
         private const val TAG = "RemoteControlAccessibility"
     }
 
+    private var currentPackage: String? = null
+    private var isServiceEnabled = false
     private var currentText = StringBuilder()
     private var lastFocusedNode: AccessibilityNodeInfo? = null
 
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
+        isServiceEnabled = true
         Log.d(TAG, "Service connected.")
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         when (event?.eventType) {
+            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
+                event.packageName?.toString()?.let { packageName ->
+                    if (currentPackage != packageName) {
+                        currentPackage = packageName
+                        currentText.clear()
+                        lastFocusedNode = null
+                        Log.d(TAG, "Switched to app: $packageName")
+                    }
+                }
+            }
             AccessibilityEvent.TYPE_VIEW_FOCUSED -> {
                 val source = event.source
                 if (source?.isEditable == true) {
                     lastFocusedNode = source
-                    // Get existing text if any
                     val text = source.text?.toString() ?: ""
                     currentText.clear()
                     currentText.append(text)
                 }
-            }
-            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
-                // Clear state when switching apps/windows
-                currentText.clear()
-                lastFocusedNode = null
             }
         }
     }
@@ -49,6 +57,11 @@ class RemoteControlAccessibilityService : AccessibilityService() {
     }
 
     fun performClick(x: Float, y: Float) {
+        if (!isServiceEnabled) {
+            Log.e(TAG, "Service is not enabled")
+            return
+        }
+
         val path = Path().apply {
             moveTo(x, y)
         }
@@ -60,7 +73,7 @@ class RemoteControlAccessibilityService : AccessibilityService() {
         dispatchGesture(gesture, object : GestureResultCallback() {
             override fun onCompleted(gestureDescription: GestureDescription?) {
                 super.onCompleted(gestureDescription)
-                Log.d(TAG, "Click performed at: ($x, $y)")
+                Log.d(TAG, "Click performed at: ($x, $y) in package: $currentPackage")
             }
 
             override fun onCancelled(gestureDescription: GestureDescription?) {
@@ -77,6 +90,11 @@ class RemoteControlAccessibilityService : AccessibilityService() {
         endY: Float,
         durationMs: Long
     ) {
+        if (!isServiceEnabled) {
+            Log.e(TAG, "Service is not enabled")
+            return
+        }
+
         val path = Path().apply {
             moveTo(startX, startY)
             lineTo(endX, endY)
@@ -89,7 +107,7 @@ class RemoteControlAccessibilityService : AccessibilityService() {
         dispatchGesture(gesture, object : GestureResultCallback() {
             override fun onCompleted(gestureDescription: GestureDescription?) {
                 super.onCompleted(gestureDescription)
-                Log.d(TAG, "Swipe completed from ($startX, $startY) to ($endX, $endY) with duration $durationMs ms")
+                Log.d(TAG, "Swipe completed from ($startX, $startY) to ($endX, $endY)")
             }
 
             override fun onCancelled(gestureDescription: GestureDescription?) {
@@ -107,7 +125,12 @@ class RemoteControlAccessibilityService : AccessibilityService() {
                 }
             }
             "Enter" -> {
-                performEnterKey()
+                lastFocusedNode?.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, Bundle().apply {
+                    putCharSequence(
+                        AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
+                        currentText.toString() + "\n"
+                    )
+                })
                 currentText.clear()
                 return
             }
@@ -141,33 +164,17 @@ class RemoteControlAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun performEnterKey() {
-        lastFocusedNode?.let { node ->
-            // First try standard text input
-            val args = Bundle().apply {
-                putCharSequence(
-                    AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
-                    currentText.toString() + "\n"
-                )
-            }
-            node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
-        }
-    }
-
     private fun findFirstEditableNode(node: AccessibilityNodeInfo?): AccessibilityNodeInfo? {
         if (node == null) return null
 
-        // First check if this node is editable
         if (node.isEditable) {
             return node
         }
 
-        // If not, check focused nodes first
         if (node.isFocused && node.isEditable) {
             return node
         }
 
-        // Then check children
         for (i in 0 until node.childCount) {
             val child = node.getChild(i)
             val result = findFirstEditableNode(child)
@@ -180,8 +187,9 @@ class RemoteControlAccessibilityService : AccessibilityService() {
         return null
     }
 
-    override fun onDestroy() {
-        super.onDestroy()
-        lastFocusedNode = null
+    override fun onUnbind(intent: Intent?): Boolean {
+        isServiceEnabled = false
+        instance = null
+        return super.onUnbind(intent)
     }
 }
