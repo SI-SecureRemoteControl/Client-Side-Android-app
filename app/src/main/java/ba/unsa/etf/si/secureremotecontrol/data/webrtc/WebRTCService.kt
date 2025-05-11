@@ -178,9 +178,12 @@ class WebRTCService @Inject constructor(
             val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
             val displayMetrics = DisplayMetrics()
             windowManager.defaultDisplay.getMetrics(displayMetrics)
-            val width = displayMetrics.widthPixels
-            val height = displayMetrics.heightPixels
-            val fps = 30
+            val originalWidth = displayMetrics.widthPixels
+            val originalHeight = displayMetrics.heightPixels
+            val fps = 15
+            val scaler=3
+            val height = originalHeight / scaler
+            val width = originalWidth / scaler
 
             // Start capturing
             Log.d(TAG, "[startScreenCapture] Starting capture with resolution: ${width}x${height} @ $fps fps")

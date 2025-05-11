@@ -168,11 +168,38 @@ class MainViewModel @Inject constructor(
                         }
 
                         "keyboard" -> {
+                            Log.d(TAG, "Received keyboard event")
+
                             val payload = response.getJSONObject("payload")
-                            val key = payload.getString("key")
-                            val eventType = payload.getString("type")
-                            if (eventType == "keydown") {
-                                RemoteControlAccessibilityService.instance?.inputCharacter(key)
+                            val key = payload.optString("key", "")
+                            val eventType = payload.optString("type", "")
+
+                            if (eventType.equals("keydown", ignoreCase = true)) {
+                                val service = RemoteControlAccessibilityService.instance
+                                if (service == null) {
+                                    Log.w(TAG, "AccessibilityService not available")
+                                    return@collect
+                                }
+
+                                when (key.lowercase()) {
+                                    "backspace" -> {
+                                        service?.performBackspace()
+                                    }
+                                    "enter" -> {
+                                        service?.performEnter()
+                                    }
+                                    // You can expand this for other special keys like Shift, Ctrl, etc. if needed
+                                    else -> {
+                                        if (key.length == 1 || key.codePoints().count() == 1L) {
+                                            // It's a single character — append it
+                                            service?.appendText(key)
+                                            Log.d(TAG, "Appended character: \"$key\"")
+                                        } else {
+                                            // Optionally handle multi-character input differently
+                                            Log.w(TAG, "Ignored complex key input: \"$key\"")
+                                        }
+                                    }
+                                }
                             }
                         }
 
