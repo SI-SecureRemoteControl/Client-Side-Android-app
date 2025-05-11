@@ -4,9 +4,13 @@ import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
 import android.app.NotificationChannel
 import android.graphics.Path
+<<<<<<< Updated upstream
 import android.os.Build
 import android.os.Bundle
 import android.text.InputType
+=======
+import android.os.Bundle
+>>>>>>> Stashed changes
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
@@ -19,6 +23,9 @@ class RemoteControlAccessibilityService : AccessibilityService() {
         var instance: RemoteControlAccessibilityService? = null
     }
 
+    private var currentText = StringBuilder()
+    private var lastFocusedNode: AccessibilityNodeInfo? = null
+
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
@@ -27,6 +34,7 @@ class RemoteControlAccessibilityService : AccessibilityService() {
 
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+<<<<<<< Updated upstream
         if (event == null) return
 
         when (event.eventType) {
@@ -48,6 +56,25 @@ class RemoteControlAccessibilityService : AccessibilityService() {
                 a.viewIdResourceName == b.viewIdResourceName &&
                 a.className == b.className &&
                 a.packageName == b.packageName
+=======
+        when (event?.eventType) {
+            AccessibilityEvent.TYPE_VIEW_FOCUSED -> {
+                val source = event.source
+                if (source?.isEditable == true) {
+                    lastFocusedNode = source
+                    // Get existing text if any
+                    val text = source.text?.toString() ?: ""
+                    currentText.clear()
+                    currentText.append(text)
+                }
+            }
+            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
+                // Clear state when switching apps/windows
+                currentText.clear()
+                lastFocusedNode = null
+            }
+        }
+>>>>>>> Stashed changes
     }
 
 
@@ -89,6 +116,7 @@ class RemoteControlAccessibilityService : AccessibilityService() {
             Log.w("Accessibility", "No editable field found for inputText.")
         }
     }
+<<<<<<< Updated upstream
     fun performBackspace() {
         val node = findFirstEditableNode(rootInActiveWindow)
         if (node != null && currentInputText.isNotEmpty()) {
@@ -177,4 +205,92 @@ class RemoteControlAccessibilityService : AccessibilityService() {
 
 
 
+=======
+
+    fun inputCharacter(char: String) {
+        when (char) {
+            "Backspace" -> {
+                if (currentText.isNotEmpty()) {
+                    currentText.deleteCharAt(currentText.length - 1)
+                }
+            }
+            "Enter" -> {
+                performEnterKey()
+                currentText.clear()
+                return
+            }
+            else -> {
+                if (char.length == 1) {
+                    currentText.append(char)
+                }
+            }
+        }
+
+        val rootNode = rootInActiveWindow
+        val inputNode = findFirstEditableNode(rootNode)
+
+        if (inputNode != null) {
+            lastFocusedNode = inputNode
+            val args = Bundle().apply {
+                putCharSequence(
+                    AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
+                    currentText.toString()
+                )
+            }
+            inputNode.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+
+            // Move cursor to end
+            inputNode.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, Bundle().apply {
+                putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, currentText.length)
+                putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, currentText.length)
+            })
+        } else {
+            Log.w(TAG, "No editable field found")
+        }
+    }
+
+    private fun performEnterKey() {
+        lastFocusedNode?.let { node ->
+            // First try standard text input
+            val args = Bundle().apply {
+                putCharSequence(
+                    AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
+                    currentText.toString() + "\n"
+                )
+            }
+            node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+        }
+    }
+
+    private fun findFirstEditableNode(node: AccessibilityNodeInfo?): AccessibilityNodeInfo? {
+        if (node == null) return null
+
+        // First check if this node is editable
+        if (node.isEditable) {
+            return node
+        }
+
+        // If not, check focused nodes first
+        if (node.isFocused && node.isEditable) {
+            return node
+        }
+
+        // Then check children
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i)
+            val result = findFirstEditableNode(child)
+            if (result != null) {
+                return result
+            }
+            child?.recycle()
+        }
+
+        return null
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        lastFocusedNode = null
+    }
+>>>>>>> Stashed changes
 }
