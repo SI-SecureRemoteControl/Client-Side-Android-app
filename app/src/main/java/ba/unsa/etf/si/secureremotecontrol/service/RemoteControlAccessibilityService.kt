@@ -7,7 +7,9 @@ import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.content.Intent
+import android.os.Build
 import android.os.Bundle
+import android.text.InputType
 import kotlin.math.max
 import kotlin.math.min
 
@@ -173,7 +175,7 @@ class RemoteControlAccessibilityService : AccessibilityService() {
                     currentText.deleteCharAt(currentText.length - 1)
                 }
             }
-            "Enter" -> {
+            /*"Enter" -> {
                 lastFocusedNode?.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, Bundle().apply {
                     putCharSequence(
                         AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
@@ -182,7 +184,12 @@ class RemoteControlAccessibilityService : AccessibilityService() {
                 })
                 currentText.clear()
                 return
+            }*/
+            "Enter" -> {
+                performEnter()
             }
+
+
             else -> {
                 if (char.length == 1) {
                     currentText.append(char)
@@ -234,7 +241,61 @@ class RemoteControlAccessibilityService : AccessibilityService() {
 
         return null
     }
+    fun performEnter() {
+        findFirstEditableNode(rootInActiveWindow)?.let { node ->
+            var actionPerformed = false // Keep track if any action succeeded
 
+            if (node.isMultiLine) {
+                val args = Bundle().apply {
+                    putCharSequence(
+                        AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
+                        currentText.toString() + "\n"
+                    )
+                }
+                lastFocusedNode!!.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+                actionPerformed = true
+            } else {
+                // For single-line fields, "Enter" usually means "submit" or "go".
+
+                // 1. Try performing the IME action ID specified by the EditText itself
+                val imeActionId = node.extras.getInt(
+                    "android.view.accessibility.AccessibilityNodeInfo.imeActionId",
+                    0
+                )
+                if (imeActionId != 0) {
+                    if (node.performAction(imeActionId)) {
+                        Log.d(
+                            "Accessibility",
+                            "Performed EditorInfo IME action ID: $imeActionId for Enter."
+                        )
+                        actionPerformed = true
+                    }
+                }
+
+                // 2. If not performed, and on API 30+, try the specific ACTION_IME_ENTER accessibility action
+                if (!actionPerformed && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    // Check if the node's actionList *actually contains* ACTION_IME_ENTER
+                    // before trying to perform it.
+                    val actionImeEnter = AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER
+                    if (node.actionList.contains(actionImeEnter)) {
+                        if (node.performAction(actionImeEnter.id)) {
+                            Log.d(
+                                "Accessibility",
+                                "Performed AccessibilityAction.ACTION_IME_ENTER."
+                            )
+                            actionPerformed = true
+                        }
+                    } else {
+                        Log.d(
+                            "Accessibility",
+                            "Node does not list ACTION_IME_ENTER in its actions."
+                        )
+                    }
+                }
+
+            }
+        }
+    }
     override fun onUnbind(intent: Intent?): Boolean {
         isServiceEnabled = false
         instance = null
