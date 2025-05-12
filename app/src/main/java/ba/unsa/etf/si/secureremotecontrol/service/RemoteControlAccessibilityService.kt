@@ -9,9 +9,7 @@ import android.view.accessibility.AccessibilityNodeInfo
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
-import android.text.InputType
 import kotlin.math.max
-import kotlin.math.min
 
 class RemoteControlAccessibilityService : AccessibilityService() {
 
@@ -31,7 +29,6 @@ class RemoteControlAccessibilityService : AccessibilityService() {
         super.onServiceConnected()
         instance = this
         isServiceEnabled = true
-        // Get screen dimensions
         val displayMetrics = resources.displayMetrics
         screenWidth = displayMetrics.widthPixels
         screenHeight = displayMetrics.heightPixels + getNavigationBarHeight(this)
@@ -73,9 +70,16 @@ class RemoteControlAccessibilityService : AccessibilityService() {
                 val source = event.source
                 if (source?.isEditable == true) {
                     lastFocusedNode = source
-                    val text = source.text?.toString() ?: ""
+                    currentText.clear() // Clear text when focusing new input field
+                    currentText.append(source.text?.toString() ?: "")
+                    Log.d(TAG, "Focused on editable field with text: ${currentText}")
+                }
+            }
+            AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> {
+                // Clear text when input field loses focus or content changes
+                if (event.source?.isEditable != true) {
                     currentText.clear()
-                    currentText.append(text)
+                    lastFocusedNode = null
                 }
             }
         }
@@ -128,8 +132,6 @@ class RemoteControlAccessibilityService : AccessibilityService() {
 
         val (clampedStartX, clampedStartY) = clampToScreen(startX, startY)
         val (clampedEndX, clampedEndY) = clampToScreen(endX, endY)
-
-        // Ensure minimum duration
         val adjustedDuration = max(durationMs, 100L)
 
         val path = Path().apply {
@@ -169,27 +171,28 @@ class RemoteControlAccessibilityService : AccessibilityService() {
     }
 
     fun inputCharacter(char: String) {
+        val inputNode = findFirstEditableNode(rootInActiveWindow)
+        if (inputNode == null) {
+            Log.w(TAG, "No editable field found")
+            return
+        }
+
+        // Ako je novi input field, resetuj currentText
+        if (lastFocusedNode == null || lastFocusedNode!!.hashCode() != inputNode.hashCode()) {
+            currentText.clear()
+            lastFocusedNode = inputNode
+        }
+
         when (char) {
             "Backspace" -> {
                 if (currentText.isNotEmpty()) {
-                    currentText.deleteCharAt(currentText.length - 1)
+                    currentText.deleteAt(currentText.length - 1)
                 }
             }
-            /*"Enter" -> {
-                lastFocusedNode?.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, Bundle().apply {
-                    putCharSequence(
-                        AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
-                        currentText.toString() + "\n"
-                    )
-                })
-                currentText.clear()
-                return
-            }*/
             "Enter" -> {
-                performEnter()
+                performEnter(inputNode)
+                return
             }
-
-
             else -> {
                 if (char.length == 1) {
                     currentText.append(char)
@@ -197,36 +200,26 @@ class RemoteControlAccessibilityService : AccessibilityService() {
             }
         }
 
-        val rootNode = rootInActiveWindow
-        val inputNode = findFirstEditableNode(rootNode)
-
-        if (inputNode != null) {
-            lastFocusedNode = inputNode
-            val args = Bundle().apply {
-                putCharSequence(
-                    AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
-                    currentText.toString()
-                )
-            }
-            inputNode.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
-
-            inputNode.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, Bundle().apply {
-                putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, currentText.length)
-                putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, currentText.length)
-            })
-        } else {
-            Log.w(TAG, "No editable field found")
+        val args = Bundle().apply {
+            putCharSequence(
+                AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
+                currentText.toString()
+            )
         }
-    }
+        inputNode.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
 
+        inputNode.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, Bundle().apply {
+            putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, currentText.length)
+            putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, currentText.length)
+        })
+
+        Log.d(TAG, "Updated field with: '${currentText}', package: $currentPackage")
+    }
+    
     private fun findFirstEditableNode(node: AccessibilityNodeInfo?): AccessibilityNodeInfo? {
         if (node == null) return null
 
         if (node.isEditable) {
-            return node
-        }
-
-        if (node.isFocused && node.isEditable) {
             return node
         }
 
@@ -241,64 +234,46 @@ class RemoteControlAccessibilityService : AccessibilityService() {
 
         return null
     }
-    fun performEnter() {
-        findFirstEditableNode(rootInActiveWindow)?.let { node ->
-            var actionPerformed = false // Keep track if any action succeeded
 
-            if (node.isMultiLine) {
-                val args = Bundle().apply {
-                    putCharSequence(
-                        AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
-                        currentText.toString() + "\n"
-                    )
-                }
-                lastFocusedNode!!.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
-                actionPerformed = true
-            } else {
-                // For single-line fields, "Enter" usually means "submit" or "go".
-
-                // 1. Try performing the IME action ID specified by the EditText itself
-                val imeActionId = node.extras.getInt(
-                    "android.view.accessibility.AccessibilityNodeInfo.imeActionId",
-                    0
+    private fun performEnter(node: AccessibilityNodeInfo) {
+        if (node.isMultiLine) {
+            currentText.append("\n")
+            val args = Bundle().apply {
+                putCharSequence(
+                    AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
+                    currentText.toString()
                 )
-                if (imeActionId != 0) {
-                    if (node.performAction(imeActionId)) {
-                        Log.d(
-                            "Accessibility",
-                            "Performed EditorInfo IME action ID: $imeActionId for Enter."
-                        )
-                        actionPerformed = true
-                    }
-                }
-
-                // 2. If not performed, and on API 30+, try the specific ACTION_IME_ENTER accessibility action
-                if (!actionPerformed && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                    // Check if the node's actionList *actually contains* ACTION_IME_ENTER
-                    // before trying to perform it.
-                    val actionImeEnter = AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER
-                    if (node.actionList.contains(actionImeEnter)) {
-                        if (node.performAction(actionImeEnter.id)) {
-                            Log.d(
-                                "Accessibility",
-                                "Performed AccessibilityAction.ACTION_IME_ENTER."
-                            )
-                            actionPerformed = true
-                        }
-                    } else {
-                        Log.d(
-                            "Accessibility",
-                            "Node does not list ACTION_IME_ENTER in its actions."
-                        )
-                    }
-                }
-
             }
+            node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+        } else {
+            var actionPerformed = false
+
+            val imeActionId = node.extras.getInt(
+                "android.view.accessibility.AccessibilityNodeInfo.imeActionId",
+                0
+            )
+            if (imeActionId != 0) {
+                if (node.performAction(imeActionId)) {
+                    actionPerformed = true
+                }
+            }
+
+            if (!actionPerformed && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                val actionImeEnter = AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER
+                if (node.actionList.contains(actionImeEnter)) {
+                    node.performAction(actionImeEnter.id)
+                }
+            }
+
+            currentText.clear()
         }
     }
+
     override fun onUnbind(intent: Intent?): Boolean {
         isServiceEnabled = false
         instance = null
+        currentText.clear()
+        lastFocusedNode = null
         return super.onUnbind(intent)
     }
 }
