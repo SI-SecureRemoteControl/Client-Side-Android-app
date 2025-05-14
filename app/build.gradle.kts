@@ -12,7 +12,7 @@ android {
 
     defaultConfig {
         applicationId = "ba.unsa.etf.si.secureremotecontrol"
-        minSdk = 24
+        minSdk = 26
         targetSdk = 34
         versionCode = 1
         versionName = "1.0"
@@ -86,7 +86,12 @@ dependencies {
     implementation("com.squareup.okhttp3:logging-interceptor:4.12.0")
 
     // WebRTC
-    implementation ("io.antmedia:webrtc-android-framework:2.8.0-SNAPSHOT")
+    //implementation ("io.antmedia:webrtc-android-framework:2.8.0-SNAPSHOT")
+
+    implementation ("com.mesibo.api:webrtc:1.0.5")
+
+    // Foreground
+    implementation ("androidx.core:core-ktx:1.9.0")
 
     // WorkManager
     implementation("androidx.work:work-runtime-ktx:2.9.0")

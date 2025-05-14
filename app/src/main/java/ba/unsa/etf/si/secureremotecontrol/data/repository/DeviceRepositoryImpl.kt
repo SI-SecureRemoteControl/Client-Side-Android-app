@@ -1,7 +1,7 @@
 package ba.unsa.etf.si.secureremotecontrol.data.repository
 
 import android.util.Log
-import ba.unsa.etf.si.secureremotecontrol.data.api.ApiService
+import ba.unsa.etf.si.secureremotecontrol.data.network.ApiService
 import ba.unsa.etf.si.secureremotecontrol.data.api.WebSocketService
 import ba.unsa.etf.si.secureremotecontrol.data.models.Device
 import ba.unsa.etf.si.secureremotecontrol.data.models.DeviceStatus

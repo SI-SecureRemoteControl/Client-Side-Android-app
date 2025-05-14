@@ -16,6 +16,10 @@ import okhttp3.WebSocketListener
 import org.json.JSONObject
 import javax.inject.Inject
 import javax.inject.Singleton
+import ba.unsa.etf.si.secureremotecontrol.data.api.RtcMessage
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.mapNotNull
 
 @Singleton
 class WebSocketServiceImpl @Inject constructor(
@@ -40,7 +44,7 @@ class WebSocketServiceImpl @Inject constructor(
             return webSocket!!
         }
 
-        val request = Request.Builder().url("wss://remote-control-gateway.onrender.com/").build()
+        val request = Request.Builder().url("wss://remote-control-gateway-production.up.railway.app/").build()
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 isConnected = true
@@ -68,7 +72,7 @@ class WebSocketServiceImpl @Inject constructor(
         }
 
         webSocket = client.newWebSocket(
-            Request.Builder().url("wss://remote-control-gateway.onrender.com/").build(),
+            Request.Builder().url("wss://remote-control-gateway-production.up.railway.app/").build(),
             listener
         )
 
@@ -76,7 +80,13 @@ class WebSocketServiceImpl @Inject constructor(
             webSocket?.close(1000, "Flow closed")
         }
     }
-
+    override fun sendRawMessage(message: String) {
+        if (!isConnected) {
+            Log.e("WebSocketService", "Cannot send message: WebSocket is not connected.")
+            connectWebSocket()
+        }
+        webSocket?.send(message)
+    }
     override fun sendRegistration(device: Device) {
         val message = gson.toJson(mapOf(
             "type" to "register",
@@ -96,6 +106,7 @@ class WebSocketServiceImpl @Inject constructor(
             "token" to token,
             "decision" to if (decision) "accepted" else "rejected"
         ))
+        Log.d("WebSocket", "Final confirmation sent: $message")
         webSocket?.send(message)
     }
 
@@ -115,7 +126,7 @@ class WebSocketServiceImpl @Inject constructor(
         stopHeartbeat()
     }
 
-     override fun startHeartbeat(deviceId: String) {
+    override fun startHeartbeat(deviceId: String) {
         heartbeatJob?.cancel()
         heartbeatJob = clientScope.launch {
             delay(500)
@@ -126,7 +137,7 @@ class WebSocketServiceImpl @Inject constructor(
         }
     }
 
-     override fun stopHeartbeat() {
+    override fun stopHeartbeat() {
         heartbeatJob?.cancel()
         heartbeatJob = null
     }
@@ -144,6 +155,22 @@ class WebSocketServiceImpl @Inject constructor(
         webSocket?.send(message)
         Log.d("WebSocket", "Session request sent from $from")
     }
+    override fun observeRtcMessages(): Flow<RtcMessage> = observeMessages()
+        .map { message ->
+            try {
+                val jsonObject = JSONObject(message)
+                val type = jsonObject.getString("type")
+                val fromId = jsonObject.optString("fromId", "")
+                val toId = jsonObject.optString("toId", "")
+                val payload = jsonObject.getJSONObject("payload")
+
+                RtcMessage(type, fromId, toId, payload)
+            } catch (e: Exception) {
+                Log.e("WebSocketService", "Error parsing RTC message", e)
+                null
+            }
+        }
+        .filterNotNull() // Filter out null values
 
     private fun sendStatusHeartbeatMessage(deviceId: String) {
         val statusMsg = JSONObject().apply {
@@ -195,7 +222,24 @@ class WebSocketServiceImpl @Inject constructor(
         override fun onFailure(webSocket: WebSocket, t: Throwable, response: okhttp3.Response?) {
             Log.e("WebSocket", "Connection failed", t)
             stopHeartbeat()
-            retryConnection("wss://remote-control-gateway.onrender.com/", "deviceId") // Replace with actual URL and device ID
+            retryConnection("wss://remote-control-gateway-production.up.railway.app/", "deviceId") // Replace with actual URL and device ID
         }
     }
+
+    override fun observeClickEvents(): Flow<Pair<Float, Float>> = observeMessages()
+        .mapNotNull { message ->
+            try {
+                val jsonObject = JSONObject(message)
+                if (jsonObject.getString("type") == "click") {
+                    val payload = jsonObject.getJSONObject("payload")
+                    val x = payload.getDouble("x").toFloat()
+                    val y = payload.getDouble("y").toFloat()
+                    Pair(x, y)
+                } else null
+            } catch (e: Exception) {
+                Log.e("WebSocket", "Error parsing click event", e)
+                null
+            }
+        }
+
 }
