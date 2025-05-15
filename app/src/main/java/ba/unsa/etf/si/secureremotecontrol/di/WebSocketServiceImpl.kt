@@ -20,6 +20,16 @@ import ba.unsa.etf.si.secureremotecontrol.data.api.RtcMessage
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.mapNotNull
+import ba.unsa.etf.si.secureremotecontrol.data.fileShare.RequestSessionFileshareMessage
+import ba.unsa.etf.si.secureremotecontrol.data.fileShare.DecisionFileshareMessage
+import ba.unsa.etf.si.secureremotecontrol.data.fileShare.BrowseRequestMessage
+import ba.unsa.etf.si.secureremotecontrol.data.fileShare.BrowseResponseMessage
+import ba.unsa.etf.si.secureremotecontrol.data.fileShare.FileEntry
+import ba.unsa.etf.si.secureremotecontrol.data.fileShare.UploadFilesMessage
+import ba.unsa.etf.si.secureremotecontrol.data.fileShare.UploadStatusMessage
+import ba.unsa.etf.si.secureremotecontrol.data.fileShare.DownloadRequestMessage
+import ba.unsa.etf.si.secureremotecontrol.data.fileShare.DownloadResponseMessage
+import com.google.gson.JsonObject
 
 @Singleton
 class WebSocketServiceImpl @Inject constructor(
@@ -241,5 +251,79 @@ class WebSocketServiceImpl @Inject constructor(
                 null
             }
         }
+    // Sending messages from Android
+    override fun sendRequestSessionFileshare(deviceId: String, sessionId: String) {
+        val message = RequestSessionFileshareMessage(
+            deviceId = deviceId,
+            sessionId = sessionId
+        )
+        sendRawMessage(gson.toJson(message))
+        Log.d("WebSocketService", "Sent request_session_fileshare: ${gson.toJson(message)}")
+    }
+
+    override fun sendBrowseResponse(deviceId: String, sessionId: String, path: String, entries: List<FileEntry>) {
+        val message = BrowseResponseMessage(
+            deviceId = deviceId,
+            sessionId = sessionId,
+            path = path,
+            entries = entries
+        )
+        sendRawMessage(gson.toJson(message))
+        Log.d("WebSocketService", "Sent browse_response: ${gson.toJson(message)}")
+    }
+
+    override fun sendUploadStatus(deviceId: String, sessionId: String, status: String, message: String?) {
+        val msg = UploadStatusMessage(
+            deviceId = deviceId,
+            sessionId = sessionId,
+            status = status,
+            message = message
+        )
+        sendRawMessage(gson.toJson(msg))
+        Log.d("WebSocketService", "Sent upload_status: ${gson.toJson(msg)}")
+    }
+
+    override fun sendDownloadResponse(deviceId: String, sessionId: String, downloadUrl: String) {
+        val message = DownloadResponseMessage(
+            deviceId = deviceId,
+            sessionId = sessionId,
+            downloadUrl = downloadUrl
+        )
+        sendRawMessage(gson.toJson(message))
+        Log.d("WebSocketService", "Sent download_response: ${gson.toJson(message)}")
+    }
+
+    // Observing messages for Android
+    // Generic helper to parse messages of a specific type
+    private inline fun <reified T> observeSpecificMessage(messageType: String): Flow<T> = observeMessages()
+        .mapNotNull { jsonString ->
+            try {
+                // A quick check for type before full parsing (optional optimization)
+                if (!jsonString.contains("\"type\":\"$messageType\"")) return@mapNotNull null
+
+                val jsonObject = gson.fromJson(jsonString, JsonObject::class.java) // Using com.google.gson.JsonObject
+                if (jsonObject.has("type") && jsonObject.get("type").asString == messageType) {
+                    gson.fromJson(jsonString, T::class.java)
+                } else {
+                    null
+                }
+            } catch (e: Exception) {
+                Log.e("WebSocketService", "Error parsing $messageType message: $jsonString", e)
+                null
+            }
+        }
+
+    override fun observeDecisionFileShare(): Flow<DecisionFileshareMessage> =
+        observeSpecificMessage("decision_fileshare")
+
+    override fun observeBrowseRequest(): Flow<BrowseRequestMessage> =
+        observeSpecificMessage("browse_request")
+
+    override fun observeUploadFiles(): Flow<UploadFilesMessage> =
+        observeSpecificMessage("upload_files")
+
+    override fun observeDownloadRequest(): Flow<DownloadRequestMessage> =
+        observeSpecificMessage("download_request")
+
 
 }

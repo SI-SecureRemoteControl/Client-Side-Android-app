@@ -25,7 +25,18 @@ import androidx.annotation.RequiresApi
 import androidx.lifecycle.LifecycleOwner
 import ba.unsa.etf.si.secureremotecontrol.service.RemoteControlAccessibilityService
 import ba.unsa.etf.si.secureremotecontrol.service.ScreenSharingService
+import okhttp3.OkHttpClient
 import org.json.JSONException
+import ba.unsa.etf.si.secureremotecontrol.data.fileShare.*
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.io.BufferedInputStream
+import java.io.File
+import java.io.FileInputStream
+import java.io.FileOutputStream
+import java.io.IOException
+import java.util.zip.ZipInputStream
+import java.util.zip.ZipOutputStream
 
 @HiltViewModel
 class MainViewModel @Inject constructor(
@@ -33,7 +44,8 @@ class MainViewModel @Inject constructor(
     private val apiService: ApiService,
     @ApplicationContext private val context: Context,
     private val tokenDataStore: TokenDataStore,
-    private val webRTCManager: WebRTCManager
+    private val webRTCManager: WebRTCManager,
+    private val okHttpClient: OkHttpClient
 ) : ViewModel() {
 
     private val TAG = "MainViewModel"
@@ -44,8 +56,17 @@ class MainViewModel @Inject constructor(
     private var messageObservationJob: Job? = null
     private var timeoutJob: Job? = null
 
+    // File Sharing State
+    private val _fileShareState = MutableStateFlow<FileShareState>(FileShareState.Idle)
+    val fileShareState: StateFlow<FileShareState> = _fileShareState
+    private var currentFileShareToken: String? = null // This will store the token used as sessionId
+    private var fileShareMessageObservationJob: Job? = null
+    val deviceId = Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID)
+
     init {
         connectAndObserveMessages()
+        startObservingFileShareMessages()
+
     }
 
     private fun connectAndObserveMessages() {
@@ -417,10 +438,268 @@ class MainViewModel @Inject constructor(
         messageObservationJob = null
     }
 
+    fun requestFileShareSession() {
+        if (_fileShareState.value !is FileShareState.Idle &&
+            _fileShareState.value !is FileShareState.Error &&
+            _fileShareState.value !is FileShareState.Terminated) {
+            Log.w(TAG, "FileShare: Request ignored, a file share session is already active or pending.")
+            _fileShareState.value = FileShareState.Error("Another file share session is active or pending.")
+            return
+        }
+
+        viewModelScope.launch {
+            val token = tokenDataStore.token.firstOrNull()
+            if (token.isNullOrEmpty()) {
+                Log.e(TAG, "FileShare: Token not found. Cannot request file share session.")
+                _fileShareState.value = FileShareState.Error("Authentication token not found.")
+                return@launch
+            }
+
+            currentFileShareToken = token // Store the token to be used as sessionId
+            _fileShareState.value = FileShareState.Requesting
+            try {
+                // The 'token' is now sent as the 'sessionId' argument
+                webSocketService.sendRequestSessionFileshare(deviceId, token)
+                _fileShareState.value = FileShareState.SessionDecisionPending(token)
+                Log.i(TAG, "FileShare: Sent request_session_fileshare with deviceId '$deviceId' and sessionId (token) '$token'")
+            } catch (e: Exception) {
+                Log.e(TAG, "FileShare: Failed to send request_session_fileshare", e)
+                _fileShareState.value = FileShareState.Error("Failed to request file share session: ${e.message}", token)
+                currentFileShareToken = null
+            }
+        }
+    }
+
+    private fun startObservingFileShareMessages() {
+        fileShareMessageObservationJob?.cancel()
+        fileShareMessageObservationJob = viewModelScope.launch {
+            launch {
+                webSocketService.observeDecisionFileShare().collect { message ->
+                    Log.d(TAG, "FileShare: Received decision_fileshare: $message")
+                    if (message.deviceId == deviceId && message.sessionId == currentFileShareToken) {
+                        if (message.decision) {
+                            _fileShareState.value = FileShareState.Active(message.sessionId)
+                            Log.i(TAG, "FileShare: Session (token ${message.sessionId}) approved by Web.")
+                        } else {
+                            _fileShareState.value = FileShareState.Error("File share session (token ${message.sessionId}) rejected by Web.", message.sessionId)
+                            currentFileShareToken = null // Clear token as session is rejected
+                        }
+                    } else {
+                        Log.w(TAG, "FileShare: Mismatched decision_fileshare. Expected token: $currentFileShareToken, Got: ${message.sessionId}")
+                    }
+                }
+            }
+            launch {
+                webSocketService.observeBrowseRequest().collect { message ->
+                    Log.d(TAG, "FileShare: Received browse_request: $message")
+                    if (message.deviceId == deviceId && message.sessionId == currentFileShareToken) {
+                        handleBrowseRequest(message)
+                    } else {
+                        Log.w(TAG, "FileShare: Mismatched browse_request. Expected token: $currentFileShareToken, Got: ${message.sessionId}")
+                    }
+                }
+            }
+            launch {
+                webSocketService.observeUploadFiles().collect { message ->
+                    Log.d(TAG, "FileShare: Received upload_files (for Android to download): $message")
+                    if (message.deviceId == deviceId && message.sessionId == currentFileShareToken) {
+                        handleUploadFilesToAndroid(message)
+                    } else {
+                        Log.w(TAG, "FileShare: Mismatched upload_files. Expected token: $currentFileShareToken, Got: ${message.sessionId}")
+                    }
+                }
+            }
+            launch {
+                webSocketService.observeDownloadRequest().collect { message ->
+                    Log.d(TAG, "FileShare: Received download_request (for Android to prepare ZIP): $message")
+                    if (message.deviceId == deviceId && message.sessionId == currentFileShareToken) {
+                        handleDownloadRequestFromAndroid(message)
+                    } else {
+                        Log.w(TAG, "FileShare: Mismatched download_request. Expected token: $currentFileShareToken, Got: ${message.sessionId}")
+                    }
+                }
+            }
+        }
+        Log.d(TAG, "FileShare: Started observing file share specific messages.")
+    }
+
+    private fun handleUploadFilesToAndroid(message: UploadFilesMessage){
+
+    }
+    private fun handleBrowseRequest(message: BrowseRequestMessage) {
+        val token = currentFileShareToken ?: return // Should not happen if checks are in place
+        _fileShareState.value = FileShareState.Browsing(token, message.path)
+        Log.i(TAG, "FileShare: Received browse_request for path: ${message.path} in session (token ${token})")
+        viewModelScope.launch {
+            try {
+                val entries = listDirectoryContents(message.path) // Runs on Dispatchers.IO
+                webSocketService.sendBrowseResponse(
+                    deviceId,
+                    token, // Send token as sessionId
+                    message.path,
+                    entries
+                )
+                if (_fileShareState.value is FileShareState.Browsing) {
+                    _fileShareState.value = FileShareState.Active(token)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "FileShare: Error browsing path ${message.path}", e)
+                webSocketService.sendBrowseResponse(deviceId, token, message.path, emptyList())
+                _fileShareState.value = FileShareState.Error("Error browsing: ${e.message}", token)
+            }
+        }
+    }
+
+
+
+    // Helper to resolve the target path on Android.
+    // This needs careful consideration for security and permissions.
+    private fun resolvePathOnAndroid(relativePath: String): File {
+        // Example: Resolve relative to app's external files directory.
+        // IMPORTANT: If relativePath can be "../.." or absolute, this can be a security risk.
+        // Sanitize or restrict relativePath.
+        val sanitizedPath = relativePath.removePrefix("/").removePrefix("./") // Basic sanitization
+        val baseDir = context.getExternalFilesDir("shared_content") ?: context.filesDir.resolve("shared_content")
+        ensureDirectoryExists(baseDir.absolutePath)
+        return File(baseDir, sanitizedPath)
+    }
+
+
+    private suspend fun downloadAndUnzipFiles(downloadUrl: String, destinationDirectoryPath: File): Boolean = withContext(
+        Dispatchers.IO) {
+        Log.i(TAG, "FileShare: Attempting to download from $downloadUrl to ${destinationDirectoryPath.absolutePath}")
+        // Using the injected OkHttpClient
+        val request = okhttp3.Request.Builder().url(downloadUrl).build()
+        val tempZipFile = File(context.cacheDir, "download_${System.currentTimeMillis()}_${Thread.currentThread().id}.zip")
+
+        try {
+            okHttpClient.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) {
+                    Log.e(TAG, "FileShare: Download failed - HTTP ${response.code} from $downloadUrl")
+                    return@withContext false
+                }
+                response.body?.byteStream()?.use { inputStream ->
+                    FileOutputStream(tempZipFile).use { fileOut -> inputStream.copyTo(fileOut) }
+                } ?: return@withContext false
+            }
+            Log.i(TAG, "FileShare: ZIP downloaded to ${tempZipFile.absolutePath}")
+
+            // Unzip directly into the destinationDirectoryPath
+            ensureDirectoryExists(destinationDirectoryPath.absolutePath)
+            ZipInputStream(BufferedInputStream(FileInputStream(tempZipFile))).use { zis ->
+                var zipEntry: java.util.zip.ZipEntry? = zis.nextEntry
+                while (zipEntry != null) {
+                    val newFile = File(destinationDirectoryPath, zipEntry.name)
+                    if (!newFile.canonicalPath.startsWith(destinationDirectoryPath.canonicalPath + File.separator)) {
+                        throw SecurityException("Zip Slip vulnerability: ${zipEntry.name}")
+                    }
+                    if (zipEntry.isDirectory) {
+                        newFile.mkdirs()
+                    } else {
+                        newFile.parentFile?.mkdirs()
+                        FileOutputStream(newFile).use { fos -> zis.copyTo(fos) }
+                    }
+                    zis.closeEntry()
+                    zipEntry = zis.nextEntry
+                }
+            }
+            Log.i(TAG, "FileShare: ZIP unzipped successfully into ${destinationDirectoryPath.absolutePath}")
+            return@withContext true
+        } catch (e: Exception) { // Catch generic Exception for robustness
+            Log.e(TAG, "FileShare: Exception during download/unzip for $downloadUrl to $destinationDirectoryPath", e)
+            return@withContext false
+        } finally {
+            tempZipFile.delete()
+        }
+    }
+
+
+    private fun handleDownloadRequestFromAndroid(message: DownloadRequestMessage) {
+
+    }
+
+    fun terminateFileShareSession(reason: String = "User terminated") {
+
+    }
+
+    // --- File System Utility Methods (listDirectoryContents, createZipFromPaths, etc.) ---
+    // (These would be similar to previous answers, ensure they use Dispatchers.IO for blocking ops)
+    // Ensure `createZipFromPaths` and `listDirectoryContents` correctly interpret paths relative to a defined root.
+
+    private suspend fun listDirectoryContents(relativePath: String): List<FileEntry> = withContext(Dispatchers.IO) {
+        Log.d(TAG, "FileShare: Listing directory relative path: $relativePath")
+        // Define a base directory. This needs to be consistent with what the Web client expects.
+        // Example: App's external files directory.
+        val baseDir = context.getExternalFilesDir(null) ?: context.filesDir
+        val targetDir = if (relativePath == "/" || relativePath.isEmpty()) baseDir else File(baseDir, relativePath)
+
+        if (!targetDir.exists() || !targetDir.isDirectory) {
+            Log.w(TAG, "FileShare: Path does not exist or is not a directory: ${targetDir.absolutePath}")
+            return@withContext emptyList()
+        }
+        Log.d(TAG, "FileShare: Listing absolute path: ${targetDir.absolutePath}")
+
+        targetDir.listFiles()?.mapNotNull { file ->
+            FileEntry(
+                name = file.name,
+                type = if (file.isDirectory) "folder" else "file",
+                size = if (file.isFile) file.length() else null
+            )
+        } ?: emptyList()
+    }
+
+
+
+    // Recursive helper for zipping (from previous response)
+    @Throws(IOException::class)
+    private fun addFileEntryToZipRecursive(fileToAdd: File, entryNameInZip: String, zos: ZipOutputStream) {
+        // ... (implementation from previous answer: ensure entryNameInZip is correctly constructed for sub-files/dirs)
+        if (fileToAdd.isDirectory) {
+            // Ensure directory entries end with a slash
+            val dirEntryName = if (entryNameInZip.endsWith("/")) entryNameInZip else "$entryNameInZip/"
+            if (dirEntryName.isNotEmpty()) { // Don't add entry for the root if entryNameInZip was ""
+                zos.putNextEntry(java.util.zip.ZipEntry(dirEntryName))
+                zos.closeEntry()
+            }
+            Log.d(TAG, "FileShare: Added directory to ZIP: $dirEntryName")
+            fileToAdd.listFiles()?.forEach { childFile ->
+                // Construct child entry name: if dirEntryName is "folder/", child is "file.txt", then "folder/file.txt"
+                addFileEntryToZipRecursive(childFile, dirEntryName + childFile.name, zos)
+            }
+        } else { // It's a file
+            FileInputStream(fileToAdd).use { fis ->
+                BufferedInputStream(fis).use { bis ->
+                    val fileEntry = java.util.zip.ZipEntry(entryNameInZip)
+                    zos.putNextEntry(fileEntry)
+                    bis.copyTo(zos)
+                    zos.closeEntry()
+                    Log.d(TAG, "FileShare: Added file to ZIP: $entryNameInZip, size: ${fileToAdd.length()}")
+                }
+            }
+        }
+    }
+
+
+
+
+    private fun ensureDirectoryExists(path: String) {
+        // ... (Implementation from previous answer) ...
+        val dir = File(path)
+        if (!dir.exists()) {
+            if (!dir.mkdirs()) {
+                Log.w(TAG, "FileShare: Failed to create directory: $path")
+            }
+        }
+    }
+
+
     override fun onCleared() {
         super.onCleared()
-        stopObservingMessages()
-        timeoutJob?.cancel()
+        stopObservingMessages() // Screen share general messages
+        fileShareMessageObservationJob?.cancel()
+        fileShareMessageObservationJob = null
+        timeoutJob?.cancel() // Screen share session request timeout
+        terminateFileShareSession("ViewModel cleared")
     }
 }
 
@@ -435,3 +714,19 @@ sealed class SessionState {
     data class Error(val message: String) : SessionState()
     object Streaming : SessionState()
 }
+
+// FileShareState sealed class (as defined in previous answers)
+sealed class FileShareState {
+    object Idle : FileShareState()
+    object Requesting : FileShareState()
+    data class SessionDecisionPending(val tokenForSession: String) : FileShareState()
+    data class Active(val tokenForSession: String) : FileShareState()
+    data class Browsing(val tokenForSession: String, val path: String) : FileShareState()
+    data class UploadingToAndroid(val tokenForSession: String, val downloadUrl: String, val targetPathOnAndroid: String) : FileShareState()
+    data class PreparingDownloadFromAndroid(val tokenForSession: String, val paths: List<String>) : FileShareState()
+    data class ReadyForDownloadFromAndroid(val tokenForSession: String, val androidHostedUrl: String) : FileShareState()
+    data class Error(val message: String, val tokenForSession: String? = null) : FileShareState()
+    object Terminated : FileShareState()
+}
+
+
