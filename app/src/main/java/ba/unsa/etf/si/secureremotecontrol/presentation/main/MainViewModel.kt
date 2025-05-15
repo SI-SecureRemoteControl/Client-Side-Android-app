@@ -437,8 +437,8 @@ class MainViewModel @Inject constructor(
         messageObservationJob?.cancel()
         messageObservationJob = null
     }
-
-    fun requestFileShareSession() {
+    private var fileShareTimeoutJob: Job? = null
+    /*fun requestFileShareSession() {
         if (_fileShareState.value !is FileShareState.Idle &&
             _fileShareState.value !is FileShareState.Error &&
             _fileShareState.value !is FileShareState.Terminated) {
@@ -468,6 +468,57 @@ class MainViewModel @Inject constructor(
                 currentFileShareToken = null
             }
         }
+    }*/
+
+    fun requestFileShareSession() {
+        if (_fileShareState.value !is FileShareState.Idle &&
+            _fileShareState.value !is FileShareState.Error &&
+            _fileShareState.value !is FileShareState.Terminated) {
+            Log.w(TAG, "FileShare: Request ignored, a file share session is already active or pending.")
+            _fileShareState.value = FileShareState.Error("Another file share session is active or pending.")
+            return
+        }
+
+        viewModelScope.launch {
+            val token = tokenDataStore.token.firstOrNull()
+            if (token.isNullOrEmpty()) {
+                Log.e(TAG, "FileShare: Token not found. Cannot request file share session.")
+                _fileShareState.value = FileShareState.Error("Authentication token not found.")
+                return@launch
+            }
+
+            currentFileShareToken = token // Store the token to be used as sessionId
+            _fileShareState.value = FileShareState.Requesting
+
+            // Start the timeout job
+            fileShareTimeoutJob?.cancel() // Cancel any existing timeout job
+            fileShareTimeoutJob = viewModelScope.launch {
+                delay(30000L) // 30 seconds timeout
+                if (_fileShareState.value == FileShareState.Requesting) {
+                    Log.w(TAG, "FileShare: Request timed out. Terminating session.")
+                    _fileShareState.value = FileShareState.Terminated
+                }
+            }
+
+            try {
+                webSocketService.sendRequestSessionFileshare(deviceId, token)
+                Log.d(TAG, "FileShare: Request sent successfully.")
+            } catch (e: Exception) {
+                Log.e(TAG, "FileShare: Failed to send request.", e)
+                _fileShareState.value = FileShareState.Error("Failed to send file share request.")
+                fileShareTimeoutJob?.cancel() // Cancel the timeout if an error occurs
+            }
+        }
+    }
+
+
+    private fun handleFileShareResponse(decision: Boolean) {
+        fileShareTimeoutJob?.cancel() // Cancel the timeout job
+        if (decision) {
+            _fileShareState.value = FileShareState.Active(currentFileShareToken ?: "unknown_token")
+        } else {
+            _fileShareState.value = FileShareState.Terminated
+        }
     }
 
     private fun startObservingFileShareMessages() {
@@ -477,13 +528,7 @@ class MainViewModel @Inject constructor(
                 webSocketService.observeDecisionFileShare().collect { message ->
                     Log.d(TAG, "FileShare: Received decision_fileshare: $message")
                     if (message.deviceId == deviceId && message.sessionId == currentFileShareToken) {
-                        if (message.decision) {
-                            _fileShareState.value = FileShareState.Active(message.sessionId)
-                            Log.i(TAG, "FileShare: Session (token ${message.sessionId}) approved by Web.")
-                        } else {
-                            _fileShareState.value = FileShareState.Error("File share session (token ${message.sessionId}) rejected by Web.", message.sessionId)
-                            currentFileShareToken = null // Clear token as session is rejected
-                        }
+                        handleFileShareResponse(message.decision)
                     } else {
                         Log.w(TAG, "FileShare: Mismatched decision_fileshare. Expected token: $currentFileShareToken, Got: ${message.sessionId}")
                     }
