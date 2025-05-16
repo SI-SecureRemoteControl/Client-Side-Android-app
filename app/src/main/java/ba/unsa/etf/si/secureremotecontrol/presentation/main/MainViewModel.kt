@@ -1,53 +1,57 @@
+
 package ba.unsa.etf.si.secureremotecontrol.presentation.main
 
+import android.Manifest
 import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.Build
+import android.os.Environment
 import android.provider.Settings
 import android.util.Log
+import android.widget.Toast
+import androidx.annotation.RequiresApi
+import androidx.core.content.ContextCompat
+import androidx.documentfile.provider.DocumentFile
+import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import ba.unsa.etf.si.secureremotecontrol.data.api.WebSocketService
 import ba.unsa.etf.si.secureremotecontrol.data.datastore.TokenDataStore
+import ba.unsa.etf.si.secureremotecontrol.data.fileShare.*
 import ba.unsa.etf.si.secureremotecontrol.data.network.ApiService
-import dagger.hilt.android.lifecycle.HiltViewModel
-import dagger.hilt.android.qualifiers.ApplicationContext
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.firstOrNull
-import kotlinx.coroutines.launch
-import org.json.JSONObject
-import javax.inject.Inject
 import ba.unsa.etf.si.secureremotecontrol.data.webrtc.WebRTCManager
-import android.content.Intent
-import android.content.pm.PackageManager
-import android.os.Build
-import androidx.annotation.RequiresApi
-import androidx.core.content.ContextCompat
-import androidx.lifecycle.LifecycleOwner
 import ba.unsa.etf.si.secureremotecontrol.service.RemoteControlAccessibilityService
 import ba.unsa.etf.si.secureremotecontrol.service.ScreenSharingService
+import com.google.gson.Gson
+import com.google.gson.annotations.SerializedName
+import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.*
 import okhttp3.OkHttpClient
+import okhttp3.Request
 import org.json.JSONException
-import ba.unsa.etf.si.secureremotecontrol.data.fileShare.*
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
+import org.json.JSONObject
 import java.io.BufferedInputStream
+import java.io.BufferedOutputStream
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.IOException
-import android.Manifest
-import android.net.Uri
-import com.google.gson.Gson
-import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlinx.coroutines.flow.SharedFlow
-import kotlinx.coroutines.flow.asSharedFlow
-import kotlinx.coroutines.flow.collect
 import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
-import androidx.documentfile.provider.DocumentFile
+import javax.inject.Inject
+
+
+data class UploadFilesMessage( // Make sure this matches the JSON structure from WebSocket
+    @SerializedName("type") val type: String = "upload_files", // Should match the type in JSON
+    @SerializedName("deviceId") val fromDeviceId: String, // ID of the device that initiated the upload (e.g., web client)
+    @SerializedName("sessionId") val sessionId: String?,
+    @SerializedName("downloadUrl") val downloadUrl: String, // URL for Android to download from
+    @SerializedName("remotePath") val remotePath: String,
+)
 
 @HiltViewModel
 class MainViewModel @Inject constructor(
@@ -56,7 +60,7 @@ class MainViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
     private val tokenDataStore: TokenDataStore,
     private val webRTCManager: WebRTCManager,
-    private val okHttpClient: OkHttpClient
+    private val okHttpClient: OkHttpClient // Assuming this is still needed for other parts
 ) : ViewModel() {
 
     private val TAG = "MainViewModel"
@@ -67,38 +71,39 @@ class MainViewModel @Inject constructor(
     private var messageObservationJob: Job? = null
     private var timeoutJob: Job? = null
 
-    // File Sharing State
+    // File Sharing State (remains for conceptual clarity, not directly tied to MANAGE_EXTERNAL_STORAGE)
     private val _fileShareState = MutableStateFlow<FileShareState>(FileShareState.Idle)
     val fileShareState: StateFlow<FileShareState> = _fileShareState
-    private var currentFileShareToken: String? = null
+    private var currentFileShareToken: String? = null // For file sharing sessions, if applicable
 
     val deviceId = Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID)
 
-    // File sharing UI events
+    // File sharing UI events (still useful for SAF fallback or explicit SAF selection)
     private val _fileShareUiEvents = MutableSharedFlow<FileShareUiEvent>()
     val fileShareUiEvents: SharedFlow<FileShareUiEvent> = _fileShareUiEvents.asSharedFlow()
 
-    // Root directory URI for SAF
-    private var rootDirectoryUri: Uri? = null
+    // Root directory URI for SAF (used as a fallback or if user explicitly selects via picker)
+    private var safRootDirectoryUri: Uri? = null
+    private var lastSuccessfulBrowsePathOnAndroid: String = "/" // Default to root
 
     init {
         connectAndObserveMessages()
 
-        // Load saved root directory URI if available
+        // Load saved SAF root directory URI if available (for SAF fallback)
         viewModelScope.launch {
             val prefs = context.getSharedPreferences("file_share_prefs", Context.MODE_PRIVATE)
-            val savedUriStr = prefs.getString("root_directory_uri", null)
+            val savedUriStr = prefs.getString("saf_root_directory_uri", null) // Changed key for clarity
             if (savedUriStr != null) {
                 try {
-                    rootDirectoryUri = Uri.parse(savedUriStr)
-                    Log.d(TAG, "Loaded saved root directory URI: $rootDirectoryUri")
+                    safRootDirectoryUri = Uri.parse(savedUriStr)
+                    Log.d(TAG, "Loaded saved SAF root directory URI: $safRootDirectoryUri")
                 } catch (e: Exception) {
-                    Log.e(TAG, "Failed to parse saved URI", e)
+                    Log.e(TAG, "Failed to parse saved SAF URI", e)
                 }
             }
         }
 
-        // Specifically observe file sharing messages
+        // Observe file sharing specific messages (like browse_request)
         viewModelScope.launch {
             try {
                 webSocketService.observeBrowseRequest().collect { browseRequest ->
@@ -107,6 +112,18 @@ class MainViewModel @Inject constructor(
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to set up file sharing message observation: ${e.message}", e)
             }
+        }
+    }
+
+    private fun hasManageExternalStoragePermission(): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            Environment.isExternalStorageManager()
+        } else {
+            // For older versions, check WRITE_EXTERNAL_STORAGE
+            ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.WRITE_EXTERNAL_STORAGE
+            ) == PackageManager.PERMISSION_GRANTED
         }
     }
 
@@ -131,21 +148,18 @@ class MainViewModel @Inject constructor(
             }
 
             _sessionState.value = SessionState.Requesting
-
-            // Start a timeout job
             timeoutJob = viewModelScope.launch {
-                delay(30000L) // 30 seconds timeout
+                delay(30000L)
                 if (_sessionState.value == SessionState.Requesting || _sessionState.value == SessionState.Waiting) {
                     _sessionState.value = SessionState.Timeout
                 }
             }
 
             try {
-                val from = Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID)
-                webSocketService.sendSessionRequest(from, token)
+                webSocketService.sendSessionRequest(deviceId, token)
             } catch (e: Exception) {
                 _sessionState.value = SessionState.Error("Error: ${e.localizedMessage}")
-                timeoutJob?.cancel() // Cancel timeout if an error occurs
+                timeoutJob?.cancel()
             }
         }
     }
@@ -157,11 +171,9 @@ class MainViewModel @Inject constructor(
                 _sessionState.value = SessionState.Error("Token not found")
                 return@launch
             }
-
-            val from = Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID)
             try {
-                webSocketService.sendFinalConformation(from, token, decision)
-                _sessionState.value = if(decision) SessionState.Connected else SessionState.Idle
+                webSocketService.sendFinalConformation(deviceId, token, decision)
+                _sessionState.value = if (decision) SessionState.Connected else SessionState.Idle
             } catch (e: Exception) {
                 _sessionState.value = SessionState.Error("Failed to send confirmation: ${e.localizedMessage}")
             }
@@ -175,19 +187,12 @@ class MainViewModel @Inject constructor(
                 _sessionState.value = SessionState.Error("Token not found")
                 return@launch
             }
-
-            val deviceId = Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID)
-
             try {
-                val response = apiService.removeSession(
-                    mapOf("token" to token, "deviceId" to deviceId)
-                )
-
+                val response = apiService.removeSession(mapOf("token" to token, "deviceId" to deviceId))
                 if (response.code() == 200) {
                     resetSessionState()
                 } else {
-                    val errorMessage = response.body()?.get("message") as? String
-                        ?: "Failed to disconnect session"
+                    val errorMessage = response.body()?.get("message") as? String ?: "Failed to disconnect session"
                     _sessionState.value = SessionState.Error(errorMessage)
                 }
             } catch (e: Exception) {
@@ -206,251 +211,121 @@ class MainViewModel @Inject constructor(
 
                     when (messageType) {
                         "click" -> {
-                            val payload = response.optJSONObject("payload")
+                            val payload = response.optJSONObject("payload") ?: return@collect
                             val x = payload.getDouble("x").toFloat()
                             val y = payload.getDouble("y").toFloat()
-                            //redo coordinates cuz relative
-                            val context = RemoteControlAccessibilityService.instance
-
-                            val displayMetrics = context?.resources?.displayMetrics
-                            //val displayMetrics = context?.resources?.displayMetrics
-                            val screenWidth = displayMetrics?.widthPixels ?: 0
-                            val screenHeight = displayMetrics?.heightPixels?.plus(
-                                getNavigationBarHeight(context)
-                            )
-                            //val screenHeight = displayMetrics?.heightPixels ?: 0
-                            Log.d("Dims", "Phone dimens ($screenWidth) ($screenHeight")
+                            val accessibilityService = RemoteControlAccessibilityService.instance ?: return@collect
+                            val displayMetrics = accessibilityService.resources.displayMetrics
+                            val screenWidth = displayMetrics.widthPixels
+                            val screenHeight = displayMetrics.heightPixels + getNavigationBarHeight(accessibilityService)
                             val absoluteX = x * screenWidth
-                            val absoluteY = y * screenHeight!! //2376 //screenHeight for OPPO as heightPixels cut off the NavBar
-
-                            context.performClick(absoluteX, absoluteY)
-
-                            Log.d("WebRTCManager", "Received case click at relative ($x, $y), ($absoluteX, $absoluteY)")
-                        }
-
-                        "session_ended" -> {
-                            Log.d(TAG, "Session ended message received")
-                            //handleSessionEnded()
+                            val absoluteY = y * screenHeight
+                            accessibilityService.performClick(absoluteX, absoluteY)
+                            Log.d(TAG, "Click at ($absoluteX, $absoluteY)")
                         }
                         "swipe" -> {
-                            val payload = response.optJSONObject("payload")
-                            val startX = payload.getDouble("startX").toFloat()
-                            val startY = payload.getDouble("startY").toFloat()
-                            val endX = payload.getDouble("endX").toFloat()
-                            val endY = payload.getDouble("endY").toFloat()
+                            val payload = response.optJSONObject("payload") ?: return@collect
+                            val accessibilityService = RemoteControlAccessibilityService.instance ?: return@collect
+                            val displayMetrics = accessibilityService.resources.displayMetrics
+                            val screenWidth = displayMetrics.widthPixels
+                            val screenHeight = displayMetrics.heightPixels + getNavigationBarHeight(accessibilityService)
+
+                            val startX = (payload.getDouble("startX") * screenWidth).toFloat()
+                            val startY = (payload.getDouble("startY") * screenHeight).toFloat()
+                            val endX = (payload.getDouble("endX") * screenWidth).toFloat()
+                            val endY = (payload.getDouble("endY") * screenHeight).toFloat()
                             val velocity = payload.optDouble("velocity", 1.0)
-
-                            val context = RemoteControlAccessibilityService.instance
-
-                            val displayMetrics = context?.resources?.displayMetrics
-                            val screenWidth = displayMetrics?.widthPixels ?: 0
-                            val screenHeight = displayMetrics?.heightPixels?.plus(
-                                getNavigationBarHeight(context)
-                            ) ?: 0
-
-                            // Convert relative coordinates to absolute screen coordinates
-                            val absoluteStartX = startX * screenWidth
-                            val absoluteStartY = startY * screenHeight
-                            val absoluteEndX = endX * screenWidth
-                            val absoluteEndY = endY * screenHeight
-
-                            // Calculate the distance of the swipe
-                            val distance = Math.sqrt(
-                                Math.pow((absoluteEndX - absoluteStartX).toDouble(), 2.0) +
-                                        Math.pow((absoluteEndY - absoluteStartY).toDouble(), 2.0)
-                            ).toFloat()
-
-                            // Calculate duration based on velocity and distance
-                            // Lower velocity means longer duration (slower swipe)
-                            // Higher velocity means shorter duration (faster swipe)
-                            // Base duration is scaled inversely by velocity with reasonable limits
+                            val distance = Math.sqrt(Math.pow((endX - startX).toDouble(), 2.0) + Math.pow((endY - startY).toDouble(), 2.0)).toFloat()
                             val baseDuration = (distance / velocity).toLong()
                             val durationMs = Math.max(100, Math.min(baseDuration, 800))
-
-                            Log.d(TAG, "Performing swipe from ($absoluteStartX, $absoluteStartY) to " +
-                                    "($absoluteEndX, $absoluteEndY) with duration $durationMs ms")
-
-                            context?.performSwipe(
-                                absoluteStartX,
-                                absoluteStartY,
-                                absoluteEndX,
-                                absoluteEndY,
-                                durationMs
-                            )
+                            accessibilityService.performSwipe(startX, startY, endX, endY, durationMs)
+                            Log.d(TAG, "Swipe from ($startX, $startY) to ($endX, $endY) duration $durationMs ms")
                         }
-
-                        "info" -> {
-                            Log.d(TAG, "Received info message")
-                            _sessionState.value = SessionState.Waiting
-                        }
+                        "info" -> _sessionState.value = SessionState.Waiting
                         "error" -> {
                             val errorMessage = response.optString("message", "Unknown error")
-                            Log.e(TAG, "Received error message: $errorMessage")
+                            Log.e(TAG, "Received error: $errorMessage")
                             _sessionState.value = SessionState.Error(errorMessage)
                             timeoutJob?.cancel()
                         }
-                        "approved" -> {
-                            Log.d(TAG, "Received approved message")
-                            _sessionState.value = SessionState.Accepted
-                        }
+                        "approved" -> _sessionState.value = SessionState.Accepted
                         "rejected" -> {
                             val reason = response.optString("message", "Session rejected")
-                            Log.w(TAG, "Received rejected message: $reason")
+                            Log.w(TAG, "Session rejected: $reason")
                             _sessionState.value = SessionState.Rejected
                         }
-                        "session_confirmed" -> {
-                            Log.d(TAG, "Server confirmed session start.")
-                        }
-                        "offer" -> {
-                            // Critical part - need to distinguish between SDP offers and ICE candidates
-                            val payload = response.optJSONObject("payload")
-                            if (payload != null) {
-                                // Check if this is actually an ICE candidate message
-                                val parsedMessage = payload.optJSONObject("parsedMessage")
-                                if (parsedMessage != null) {
-                                    val innerType = parsedMessage.optString("type", "")
-
-                                    if (innerType == "ice-candidate") {
-                                        // This is actually an ICE candidate
-                                        handleIceCandidate(response)
-                                    } else if (innerType == "offer") {
-                                        // This is a genuine SDP offer
-                                        handleSdpOffer(response)
-                                    } else {
-                                        Log.w(TAG, "Unknown inner message type: $innerType")
-                                    }
-                                } else {
-                                    // Direct structure without parsedMessage
-                                    handleSdpOffer(response)
-                                }
-                            }
-                        }
+                        "session_confirmed" -> Log.d(TAG, "Server confirmed session start.")
+                        "offer", "ice-candidate" -> handleWebRtcSignaling(response) // Combined handler
                         "keyboard" -> {
-                            val payload = response.getJSONObject("payload")
+                            val payload = response.optJSONObject("payload") ?: return@collect
                             val key = payload.getString("key")
-                            val eventType = payload.getString("type")
-                            if (eventType == "keydown") {
-                                when (key) {
-                                    "Backspace", "Enter" -> RemoteControlAccessibilityService.instance?.inputCharacter(key)
-                                    else -> {
-                                        if (key.length == 1) {
-                                            RemoteControlAccessibilityService.instance?.inputCharacter(key)
-                                        }
-                                    }
-                                }
+                            if (payload.getString("type") == "keydown") {
+                                RemoteControlAccessibilityService.instance?.inputCharacter(key)
                             }
                         }
-                        "ice-candidate" -> {
-                            handleIceCandidate(response)
+                        "browse_request" -> { // Already handled by dedicated observer, but good to have a case
+                            Log.d(TAG, "Browse request received (also handled by dedicated observer).")
+                            // val browseRequestMessage = Gson().fromJson(message, BrowseRequestMessage::class.java)
+                            // handleBrowseRequest(browseRequestMessage)
                         }
-                        "browse_request" -> {
-                            val browseRequestMessage = Gson().fromJson(message, BrowseRequestMessage::class.java)
-                            handleBrowseRequest(browseRequestMessage)
+
+                        "upload_files" -> {
+                            Log.d(TAG, "Received 'upload_files' message type.")
+                            // Assuming the structure of UploadFilesMessage matches the top-level fields of jsonObject
+                            // If "deviceId", "downloadUrl", etc. are nested under a "payload", adjust parsing.
+                            try {
+                                val uploadMessage = Gson().fromJson(message, UploadFilesMessage::class.java)
+                                handleUploadFilesToAndroid(uploadMessage)
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Error parsing UploadFilesMessage: $message", e)
+                            }
                         }
-                        else -> {
-                            Log.d(TAG, "Unhandled message type: $messageType")
-                        }
+                        else -> Log.d(TAG, "Unhandled message type: $messageType")
                     }
                 } catch (e: JSONException) {
                     Log.e(TAG, "Failed to parse WebSocket message: $message", e)
-                    _sessionState.value = SessionState.Error("Failed to parse server message")
                 } catch (e: Exception) {
                     Log.e(TAG, "Error processing message: ${e.message}", e)
                 }
             }
         }
     }
+    private fun handleWebRtcSignaling(response: JSONObject) {
+        val fromId = response.optString("fromId", "unknown_sender")
+        val payload = response.optJSONObject("payload") ?: return
+        val messageType = response.optString("type") // "offer" or "ice-candidate"
+
+        // Potentially nested structure
+        val actualPayload = payload.optJSONObject("parsedMessage")?.optJSONObject("payload") ?: payload
+
+        when (messageType) {
+            "offer" -> {
+                if (actualPayload.has("sdp")) {
+                    val sdp = actualPayload.getString("sdp")
+                    Log.d(TAG, "Handling SDP offer from $fromId")
+                    webRTCManager.confirmSessionAndStartStreaming(fromId, sdp)
+                } else {
+                    Log.e(TAG, "SDP not found in offer: $actualPayload")
+                }
+            }
+            "ice-candidate" -> {
+                val candidate = actualPayload.optString("candidate")
+                if (candidate.isNotEmpty()) {
+                    Log.d(TAG, "Handling ICE candidate from $fromId")
+                    webRTCManager.handleRtcMessage("ice-candidate", fromId, actualPayload)
+                } else {
+                    Log.d(TAG, "Received empty ICE candidate from $fromId (end of candidates).")
+                }
+            }
+            else -> Log.w(TAG, "Unknown WebRTC signaling type: $messageType")
+        }
+    }
+
 
     fun getNavigationBarHeight(context: Context): Int {
         val resources = context.resources
         val resourceId = resources.getIdentifier("navigation_bar_height", "dimen", "android")
-        return if (resourceId > 0) {
-            resources.getDimensionPixelSize(resourceId)
-        } else {
-            0
-        }
-    }
-
-    private fun handleSdpOffer(response: JSONObject) {
-        try {
-            val fromId = response.optString("fromId", "unknown_sender")
-            val payload = response.optJSONObject("payload")
-
-            if (payload != null) {
-                val parsedMessage = payload.optJSONObject("parsedMessage")
-
-                if (parsedMessage != null) {
-                    val innerPayload = parsedMessage.optJSONObject("payload")
-
-                    if (innerPayload != null && innerPayload.has("sdp")) {
-                        val sdp = innerPayload.getString("sdp")
-                        Log.d(TAG, "Found SDP in nested payload structure")
-                        webRTCManager.confirmSessionAndStartStreaming(fromId, sdp)
-                        return
-                    }
-                }
-
-                // Check direct structure just in case
-                if (payload.has("sdp")) {
-                    val sdp = payload.getString("sdp")
-                    Log.d(TAG, "Found SDP directly in payload")
-                    webRTCManager.confirmSessionAndStartStreaming(fromId, sdp)
-                    return
-                }
-            }
-
-            Log.e(TAG, "SDP not found in offer message: $payload")
-        } catch (e: Exception) {
-            Log.e(TAG, "Error handling SDP offer: ${e.message}", e)
-            _sessionState.value = SessionState.Error("Error processing offer: ${e.message}")
-        }
-    }
-
-    private fun handleIceCandidate(response: JSONObject) {
-        try {
-            val fromId = response.optString("fromId", "unknown_sender")
-            val payload = response.optJSONObject("payload")
-
-            if (payload != null) {
-                val parsedMessage = payload.optJSONObject("parsedMessage")
-
-                if (parsedMessage != null) {
-                    val innerPayload = parsedMessage.optJSONObject("payload")
-
-                    if (innerPayload != null) {
-                        val candidate = innerPayload.optString("candidate", "")
-                        val sdpMid = innerPayload.optString("sdpMid", "")
-                        val sdpMLineIndex = innerPayload.optInt("sdpMLineIndex", 0)
-
-                        // Only forward if not an empty candidate
-                        if (candidate.isNotEmpty()) {
-                            Log.d(TAG, "Processing ICE candidate")
-                            try {
-                                webRTCManager.handleRtcMessage("ice-candidate", fromId, innerPayload)
-                            } catch (e: Exception) {
-                                Log.e(TAG, "Error processing ICE candidate", e)
-                            }
-                        } else {
-                            Log.d(TAG, "Received empty ICE candidate (end of candidates)")
-                        }
-                        return
-                    }
-                }
-
-                // Check direct structure as well
-                val candidate = payload.optString("candidate", "")
-                if (candidate.isNotEmpty()) {
-                    Log.d(TAG, "Processing ICE candidate from direct payload")
-                    try {
-                        webRTCManager.handleRtcMessage("ice-candidate", fromId, payload)
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Error processing direct ICE candidate", e)
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error handling ICE candidate: ${e.message}", e)
-        }
+        return if (resourceId > 0) resources.getDimensionPixelSize(resourceId) else 0
     }
 
     @RequiresApi(Build.VERSION_CODES.O)
@@ -467,9 +342,7 @@ class MainViewModel @Inject constructor(
     }
 
     fun startObservingRtcMessages(lifecycleOwner: LifecycleOwner) {
-        viewModelScope.launch {
-            webRTCManager.startObservingRtcMessages(lifecycleOwner)
-        }
+        viewModelScope.launch { webRTCManager.startObservingRtcMessages(lifecycleOwner) }
     }
 
     fun resetSessionState() {
@@ -482,29 +355,26 @@ class MainViewModel @Inject constructor(
         messageObservationJob = null
     }
 
-    private var fileShareTimeoutJob: Job? = null
+    // --- File Sharing Logic ---
 
-    // Request the user to select a directory
-    fun requestDirectoryAccess() {
+    // Request the user to select a directory (for SAF fallback)
+    fun requestDirectoryAccessViaPicker() {
         viewModelScope.launch {
             _fileShareUiEvents.emit(FileShareUiEvent.RequestDirectoryPicker)
         }
     }
 
-    // Set the selected directory URI
-    fun setRootDirectoryUri(uri: Uri) {
-        rootDirectoryUri = uri
-        // Save the URI to preferences for persistence
+    // Set the selected SAF directory URI (after picker)
+    fun setSafRootDirectoryUri(uri: Uri) {
+        safRootDirectoryUri = uri
         val prefs = context.getSharedPreferences("file_share_prefs", Context.MODE_PRIVATE)
-        prefs.edit().putString("root_directory_uri", uri.toString()).apply()
-
-        // Notify UI that directory is ready
+        prefs.edit().putString("saf_root_directory_uri", uri.toString()).apply()
+        Log.i(TAG, "FileShare: SAF Root Directory URI set to: $uri")
         viewModelScope.launch {
-            _fileShareUiEvents.emit(FileShareUiEvent.DirectorySelected(uri))
+            _fileShareUiEvents.emit(FileShareUiEvent.DirectorySelected(uri)) // Notify UI
         }
     }
 
-    // Handle browse request with SAF
     private fun handleBrowseRequest(message: BrowseRequestMessage) {
         viewModelScope.launch {
             val token = tokenDataStore.token.firstOrNull()
@@ -512,34 +382,23 @@ class MainViewModel @Inject constructor(
                 Log.e(TAG, "FileShare: Token not found. Cannot browse.")
                 return@launch
             }
-
             Log.i(TAG, "FileShare: Received browse_request for path: ${message.path} in session (token ${token})")
 
-            // Check if root directory is selected
-            if (rootDirectoryUri == null) {
-                Log.e(TAG, "FileShare: Root directory not selected. Requesting directory selection.")
-                // Request directory selection
-                _fileShareUiEvents.emit(FileShareUiEvent.RequestDirectoryPicker)
-                // Send empty response for now
-                webSocketService.sendBrowseResponse(deviceId, token, message.path, emptyList())
-                return@launch
-            }
-
             try {
-                // Get directory contents using SAF
-                val entries = listDirectorySAF(message.path)
+                val entries = listDirectoryContents(message.path)
+                if (entries == null && !hasManageExternalStoragePermission() && safRootDirectoryUri == null) {
+                    // This means neither MANAGE_EXTERNAL_STORAGE is granted, nor a SAF URI is set.
+                    // We need to ask the user to grant MANAGE_EXTERNAL_STORAGE or pick a dir via SAF.
+                    Log.w(TAG, "FileShare: No permission for file access. MANAGE_EXTERNAL_STORAGE not granted and no SAF URI selected.")
+                    // Emitting an event to UI to handle this situation (e.g., show a message or prompt for MANAGE_EXTERNAL_STORAGE)
+                    // For now, we'll send an empty response. The UI should ideally prompt the user.
+                    _fileShareUiEvents.emit(FileShareUiEvent.PermissionOrDirectoryNeeded) // New event
+                    webSocketService.sendBrowseResponse(deviceId, token, message.path, emptyList())
+                    return@launch
+                }
 
-                Log.d(TAG, "FileShare: Found ${entries.size} entries for path ${message.path}")
-
-                // Send the response
-                webSocketService.sendBrowseResponse(
-                    deviceId,
-                    token,
-                    message.path,
-                    entries
-                )
-
-                Log.d(TAG, "FileShare: Browse response sent successfully with ${entries.size} entries")
+                webSocketService.sendBrowseResponse(deviceId, token, message.path, entries ?: emptyList())
+                Log.d(TAG, "FileShare: Browse response sent for path ${message.path} with ${entries?.size ?: 0} entries.")
             } catch (e: Exception) {
                 Log.e(TAG, "FileShare: Error browsing path ${message.path}", e)
                 webSocketService.sendBrowseResponse(deviceId, token, message.path, emptyList())
@@ -547,122 +406,349 @@ class MainViewModel @Inject constructor(
         }
     }
 
-    // List directory contents using DocumentFile and SAF
-    private suspend fun listDirectorySAF(relativePath: String): List<FileEntry> = withContext(Dispatchers.IO) {
-        val currentRootUri = rootDirectoryUri
-        if (currentRootUri == null) {
-            Log.w(TAG, "FileShare: Root directory URI not set. Cannot list contents.")
-            return@withContext emptyList()
-        }
+    private suspend fun handleUploadFilesToAndroid(message: UploadFilesMessage) = withContext(Dispatchers.IO) {
+        Log.i(TAG, "FileShare: DOWNLOAD_TO_ANDROID started. URL: ${message.downloadUrl}, Web's remotePath: '${message.remotePath}', Last browsed Android base: '$lastSuccessfulBrowsePathOnAndroid'")
 
-        Log.d(TAG, "FileShare: Listing directory relative path: $relativePath using root URI: $currentRootUri")
+        _fileShareState.value = FileShareState.UploadingToAndroid( // State indicates Android is receiving files
+            tokenForSession = message.sessionId ?: currentFileShareToken ?: "unknown",
+            downloadUrl = message.downloadUrl,
+            targetPathOnAndroid = lastSuccessfulBrowsePathOnAndroid // Base path on Android
+        )
 
-        var targetDocFile = DocumentFile.fromTreeUri(context, currentRootUri)
+        val tempZipFile = File(context.cacheDir, "server_download_${System.currentTimeMillis()}.zip")
 
-        if (targetDocFile == null || !targetDocFile.exists()) {
-            Log.e(TAG, "FileShare: Could not access root directory: $currentRootUri")
-            return@withContext emptyList()
-        }
-
-        // Navigate to the specified relative path if it's not the root
-        if (relativePath != "/" && relativePath.isNotEmpty()) {
-            val pathSegments = relativePath.trim('/').split('/')
-            for (segment in pathSegments) {
-                if (segment.isNotEmpty()) {
-                    val childDoc = targetDocFile?.findFile(segment)
-                    if (childDoc == null || !childDoc.exists()) {
-                        Log.w(TAG, "FileShare: Path segment not found: $segment in $relativePath")
-                        return@withContext emptyList()
-                    }
-                    targetDocFile = childDoc
+        try {
+            // 1. Download the ZIP file from the server
+            Log.d(TAG, "FileShare: Downloading from ${message.downloadUrl} to ${tempZipFile.absolutePath}")
+            val request = Request.Builder().url(message.downloadUrl).build()
+            okHttpClient.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) {
+                    Log.e(TAG, "FileShare: Download from server failed. Code: ${response.code}, Message: ${response.message}")
+                    _fileShareState.value = FileShareState.Error("Download failed: ${response.code} ${response.message}")
+                    return@withContext
                 }
+                response.body?.byteStream()?.use { inputStream ->
+                    FileOutputStream(tempZipFile).use { outputStream ->
+                        inputStream.copyTo(outputStream)
+                    }
+                } ?: run {
+                    Log.e(TAG, "FileShare: Download from server failed. Response body is null.")
+                    _fileShareState.value = FileShareState.Error("Download failed: Empty response from server")
+                    return@withContext
+                }
+            }
+            Log.d(TAG, "FileShare: Download from server complete. Size: ${tempZipFile.length()} bytes")
+
+            // 2. Determine final target directory on Android and extract
+            if (hasManageExternalStoragePermission()) {
+                val androidStorageRoot = Environment.getExternalStorageDirectory()
+                // Normalize last browsed path
+                val baseAndroidPath = if (lastSuccessfulBrowsePathOnAndroid == "/") "" else lastSuccessfulBrowsePathOnAndroid.trim('/')
+                // Normalize web's remote path hint
+                val webSubPath = message.remotePath.trim('/')
+                // Combine them
+                val fullRelativePath = if (baseAndroidPath.isEmpty()) webSubPath else if (webSubPath.isEmpty()) baseAndroidPath else "$baseAndroidPath/$webSubPath"
+
+                val finalTargetDir = File(androidStorageRoot, fullRelativePath.trimStart('/'))
+
+                if (!finalTargetDir.exists() && !finalTargetDir.mkdirs()) {
+                    Log.e(TAG, "FileShare: Could not create target directory (direct): ${finalTargetDir.absolutePath}")
+                    _fileShareState.value = FileShareState.Error("Failed to create target directory on Android")
+                    return@withContext
+                }
+                Log.i(TAG, "FileShare: Extracting downloaded ZIP (direct access) to: ${finalTargetDir.absolutePath}")
+                extractZip(tempZipFile, finalTargetDir)
+                _fileShareState.value = FileShareState.Active(message.sessionId ?: "unknown") // Or a DownloadComplete state
+                Log.i(TAG, "FileShare: Files downloaded and extracted successfully to (direct): ${finalTargetDir.absolutePath}")
+                withContext(Dispatchers.Main) { Toast.makeText(context, "Files received into: ${fullRelativePath.ifEmpty { "root" }}", Toast.LENGTH_LONG).show() }
+
+            } else if (safRootDirectoryUri != null) {
+                var currentSafTargetDir = DocumentFile.fromTreeUri(context, safRootDirectoryUri!!)
+                if (currentSafTargetDir == null || !currentSafTargetDir.isDirectory) {
+                    Log.e(TAG, "FileShare: SAF root directory not accessible: $safRootDirectoryUri")
+                    _fileShareState.value = FileShareState.Error("SAF root not accessible")
+                    return@withContext
+                }
+
+                // Navigate to lastSuccessfulBrowsePathOnAndroid within SAF root
+                val browsePathSegments = lastSuccessfulBrowsePathOnAndroid.trim('/').split('/').filter { it.isNotEmpty() }
+                for (segment in browsePathSegments) {
+                    currentSafTargetDir = currentSafTargetDir?.findFile(segment)?.also {
+                        if (!it.isDirectory) {
+                            Log.e(TAG, "FileShare: SAF segment for browse path '$segment' is a file, not directory.")
+                            throw IOException("SAF browse path conflict: '$segment' is a file.")
+                        }
+                    } ?: throw IOException("SAF browse path segment '$segment' not found.")
+                }
+                // currentSafTargetDir now points to the Android base path (e.g., /MyFolder/Pictures)
+
+                // Create subdirectories based on message.remotePath
+                val webRemotePathSegments = message.remotePath.trim('/').split('/').filter { it.isNotEmpty() }
+                for (segment in webRemotePathSegments) {
+                    val existingSubDir = currentSafTargetDir?.findFile(segment)
+                    currentSafTargetDir = if (existingSubDir != null) {
+                        if (!existingSubDir.isDirectory) {
+                            Log.e(TAG, "FileShare: SAF segment for remotePath '$segment' is a file, not directory.")
+                            throw IOException("SAF remotePath conflict: '$segment' is a file.")
+                        }
+                        existingSubDir
+                    } else {
+                        currentSafTargetDir?.createDirectory(segment)
+                            ?: throw IOException("Could not create SAF subdirectory '$segment'.")
+                    }
+                }
+                // currentSafTargetDir now points to the final destination (e.g., /MyFolder/Pictures/Vacation Shots)
+
+                Log.i(TAG, "FileShare: Extracting downloaded ZIP (SAF) to: ${currentSafTargetDir?.uri}")
+                if (currentSafTargetDir != null) {
+                    extractZipToSaf(tempZipFile, currentSafTargetDir)
+                }
+                _fileShareState.value = FileShareState.Active(message.sessionId ?: "unknown")
+                Log.i(TAG, "FileShare: Files downloaded and extracted successfully to (SAF): ${currentSafTargetDir?.uri}")
+                withContext(Dispatchers.Main) { Toast.makeText(context, "Files received (SAF) into path ending with: ${message.remotePath.ifEmpty{"root"}}", Toast.LENGTH_LONG).show() }
+
+            } else {
+                Log.e(TAG, "FileShare: No write access. Grant MANAGE_EXTERNAL_STORAGE or pick SAF directory.")
+                _fileShareState.value = FileShareState.Error("No permission on Android to save downloaded files.")
+                _fileShareUiEvents.emit(FileShareUiEvent.PermissionOrDirectoryNeeded)
+                return@withContext
+            }
+
+        } catch (e: IOException) { // Catch specific IOExceptions from SAF navigation/creation
+            Log.e(TAG, "FileShare: IOException during file download/extraction from server", e)
+            _fileShareState.value = FileShareState.Error("IO Error: ${e.message}")
+        }
+        catch (e: Exception) {
+            Log.e(TAG, "FileShare: General error during file download/extraction from server", e)
+            _fileShareState.value = FileShareState.Error("Download/Extraction error: ${e.message}")
+        } finally {
+            if (tempZipFile.exists()) {
+                tempZipFile.delete()
+                Log.d(TAG, "FileShare: Deleted temporary downloaded ZIP: ${tempZipFile.absolutePath}")
+            }
+        }
+    }
+
+
+    private suspend fun listDirectoryContents(relativePath: String): List<FileEntry>? = withContext(Dispatchers.IO) {
+        Log.d(TAG, "FileShare: Attempting to list directory: '$relativePath'")
+
+        if (hasManageExternalStoragePermission()) {
+            Log.i(TAG, "FileShare: Using MANAGE_EXTERNAL_STORAGE for direct file access.")
+            try {
+                val externalStorageRoot = Environment.getExternalStorageDirectory()
+                val targetPath = if (relativePath == "/" || relativePath.isEmpty()) {
+                    externalStorageRoot
+                } else {
+                    File(externalStorageRoot, relativePath.trimStart('/'))
+                }
+
+                if (!targetPath.exists() || !targetPath.isDirectory) {
+                    Log.w(TAG, "FileShare: Direct access path does not exist or not a directory: ${targetPath.absolutePath}")
+                    return@withContext emptyList() // Path doesn't exist or isn't a dir
+                }
+
+                val entries = mutableListOf<FileEntry>()
+                targetPath.listFiles()?.forEach { file ->
+                    entries.add(
+                        FileEntry(
+                            name = file.name,
+                            type = if (file.isDirectory) "folder" else "file",
+                            size = if (file.isFile) file.length() else null
+                        )
+                    )
+                }
+                Log.d(TAG, "FileShare: Direct access found ${entries.size} entries in ${targetPath.absolutePath}")
+                return@withContext entries
+            } catch (e: Exception) {
+                Log.e(TAG, "FileShare: Error using direct file access for '$relativePath'", e)
+                // Fall through to SAF or return null if SAF also fails
             }
         }
 
-        if (targetDocFile == null || !targetDocFile.isDirectory) {
-            Log.w(TAG, "FileShare: Target path is not a directory: $relativePath")
-            return@withContext emptyList()
+        // Fallback to SAF if MANAGE_EXTERNAL_STORAGE is not available or failed
+        val currentSafRootUri = safRootDirectoryUri
+        if (currentSafRootUri != null) {
+            Log.i(TAG, "FileShare: MANAGE_EXTERNAL_STORAGE not available or failed. Trying SAF with root: $currentSafRootUri")
+            try {
+                var targetDocFile = DocumentFile.fromTreeUri(context, currentSafRootUri)
+                if (targetDocFile == null || !targetDocFile.exists()) {
+                    Log.e(TAG, "FileShare: SAF root directory not accessible: $currentSafRootUri")
+                    return@withContext null // Cannot access SAF root
+                }
+
+                if (relativePath != "/" && relativePath.isNotEmpty()) {
+                    val pathSegments = relativePath.trim('/').split('/')
+                    for (segment in pathSegments) {
+                        if (segment.isNotEmpty()) {
+                            val childDoc = targetDocFile?.findFile(segment)
+                            if (childDoc == null || !childDoc.exists()) {
+                                Log.w(TAG, "FileShare: SAF path segment not found: '$segment' in '$relativePath'")
+                                return@withContext emptyList() // Path segment not found
+                            }
+                            targetDocFile = childDoc
+                        }
+                    }
+                }
+
+                if (targetDocFile == null || !targetDocFile.isDirectory) {
+                    Log.w(TAG, "FileShare: SAF target path is not a directory: '$relativePath'")
+                    return@withContext emptyList() // Target not a directory
+                }
+
+                val entries = mutableListOf<FileEntry>()
+                targetDocFile.listFiles().forEach { docFile ->
+                    entries.add(
+                        FileEntry(
+                            name = docFile.name ?: "Unknown",
+                            type = if (docFile.isDirectory) "folder" else "file",
+                            size = if (docFile.isFile) docFile.length() else null
+                        )
+                    )
+                }
+                Log.d(TAG, "FileShare: SAF found ${entries.size} entries for '$relativePath'")
+                return@withContext entries
+            } catch (e: Exception) {
+                Log.e(TAG, "FileShare: Error using SAF for '$relativePath'", e)
+                return@withContext null // SAF attempt failed
+            }
         }
 
-        Log.d(TAG, "FileShare: Listing contents of: ${targetDocFile.uri}")
+        Log.w(TAG, "FileShare: No access method available for '$relativePath'. MANAGE_EXTERNAL_STORAGE not granted and no SAF root URI set/valid.")
+        return@withContext null // Neither method worked
+    }
 
-        // List all files in the directory
-        val entries = mutableListOf<FileEntry>()
 
-        targetDocFile.listFiles().forEach { file ->
-            val name = file.name ?: "Unknown"
-            val type = if (file.isDirectory) "folder" else "file"
-            val size = if (file.isFile) file.length() else null
-
-            entries.add(FileEntry(name = name, type = type, size = size))
+    @Throws(IOException::class)
+    private fun extractZip(zipFile: File, targetDirectory: File) {
+        if (!targetDirectory.exists()) targetDirectory.mkdirs()
+        ZipInputStream(BufferedInputStream(FileInputStream(zipFile))).use { zis ->
+            var zipEntry: java.util.zip.ZipEntry? = zis.nextEntry
+            while (zipEntry != null) {
+                val newPath = File(targetDirectory, zipEntry.name)
+                if (zipEntry.isDirectory) {
+                    if (!newPath.mkdirs() && !newPath.isDirectory) { // Check if already exists as dir
+                        Log.w(TAG, "FileShare: Failed to create directory or already exists as file: ${newPath.path}")
+                    }
+                } else {
+                    // Ensure parent directory exists
+                    newPath.parentFile?.mkdirs()
+                    FileOutputStream(newPath).use { fos ->
+                        BufferedOutputStream(fos).use { bos ->
+                            val buffer = ByteArray(BUFFER_SIZE)
+                            var read: Int
+                            while (zis.read(buffer, 0, BUFFER_SIZE).also { read = it } != -1) {
+                                bos.write(buffer, 0, read)
+                            }
+                        }
+                    }
+                }
+                zis.closeEntry()
+                zipEntry = zis.nextEntry
+            }
         }
-
-        Log.d(TAG, "FileShare: Found ${entries.size} entries")
-        return@withContext entries
+        Log.d(TAG, "FileShare: ZIP extraction complete to ${targetDirectory.absolutePath}")
     }
 
-    // For legacy purposes, keep the old method but call the SAF method
-    private suspend fun listDirectoryContents(relativePath: String): List<FileEntry> {
-        return listDirectorySAF(relativePath)
+    @Throws(IOException::class)
+    private fun extractZipToSaf(zipFile: File, targetSafDirectory: DocumentFile) {
+        ZipInputStream(BufferedInputStream(FileInputStream(zipFile))).use { zis ->
+            var zipEntry: java.util.zip.ZipEntry? = zis.nextEntry
+            while (zipEntry != null) {
+                val entryName = zipEntry.name
+                if (zipEntry.isDirectory) {
+                    // Create directory structure within SAF
+                    var currentDir = targetSafDirectory
+                    entryName.trim('/').split('/').forEach { segment ->
+                        if (segment.isNotEmpty()) {
+                            val existingDir = currentDir.findFile(segment)
+                            currentDir = if (existingDir != null) {
+                                if (!existingDir.isDirectory) throw IOException("Path conflict: '$segment' is a file, expected directory.")
+                                existingDir
+                            } else {
+                                currentDir.createDirectory(segment)
+                                    ?: throw IOException("Could not create SAF directory: $segment")
+                            }
+                        }
+                    }
+                } else {
+                    // Create file within SAF structure
+                    var parentDir = targetSafDirectory
+                    val pathParts = entryName.split('/')
+                    val fileName = pathParts.last()
+                    val dirPathParts = pathParts.dropLast(1)
+
+                    dirPathParts.forEach { segment ->
+                        if (segment.isNotEmpty()) {
+                            val existingDir = parentDir.findFile(segment)
+                            parentDir = if (existingDir != null) {
+                                if (!existingDir.isDirectory) throw IOException("Path conflict: '$segment' is a file, expected directory for file parent.")
+                                existingDir
+                            } else {
+                                parentDir.createDirectory(segment)
+                                    ?: throw IOException("Could not create SAF parent directory: $segment for $fileName")
+                            }
+                        }
+                    }
+
+                    val newFile = parentDir.createFile(
+                        determineMimeType(fileName), // You might need a helper for MIME types
+                        fileName
+                    ) ?: throw IOException("Could not create SAF file: $fileName in ${parentDir.uri}")
+
+                    context.contentResolver.openOutputStream(newFile.uri)?.use { os ->
+                        BufferedOutputStream(os).use { bos ->
+                            val buffer = ByteArray(BUFFER_SIZE)
+                            var read: Int
+                            while (zis.read(buffer, 0, BUFFER_SIZE).also { read = it } != -1) {
+                                bos.write(buffer, 0, read)
+                            }
+                        }
+                    } ?: throw IOException("Could not open output stream for SAF file: ${newFile.uri}")
+                }
+                zis.closeEntry()
+                zipEntry = zis.nextEntry
+            }
+        }
+        Log.d(TAG, "FileShare: ZIP extraction to SAF complete to ${targetSafDirectory.uri}")
     }
 
-    private fun handleUploadFilesToAndroid(message: UploadFilesMessage) {
-        // Implementation for handling upload - would use DocumentFile for SAF
+    // Helper to determine MIME type, can be expanded
+    private fun determineMimeType(fileName: String): String {
+        return when (fileName.substringAfterLast('.', "").lowercase()) {
+            "txt" -> "text/plain"
+            "jpg", "jpeg" -> "image/jpeg"
+            "png" -> "image/png"
+            "pdf" -> "application/pdf"
+            // Add more common types or use MimeTypeMap
+            else -> "application/octet-stream" // Default binary type
+        }
     }
 
-    private fun handleDownloadRequestFromAndroid(message: DownloadRequestMessage) {
-        // Implementation for handling download - would use DocumentFile for SAF
-    }
 
     fun terminateFileShareSession(reason: String = "User terminated") {
-        // Implementation for terminating file share session
-    }
-
-    // Recursive helper for zipping (from previous response)
-    @Throws(IOException::class)
-    private fun addFileEntryToZipRecursive(fileToAdd: File, entryNameInZip: String, zos: ZipOutputStream) {
-        if (fileToAdd.isDirectory) {
-            // Ensure directory entries end with a slash
-            val dirEntryName = if (entryNameInZip.endsWith("/")) entryNameInZip else "$entryNameInZip/"
-            if (dirEntryName.isNotEmpty()) { // Don't add entry for the root if entryNameInZip was ""
-                zos.putNextEntry(java.util.zip.ZipEntry(dirEntryName))
-                zos.closeEntry()
-            }
-            Log.d(TAG, "FileShare: Added directory to ZIP: $dirEntryName")
-            fileToAdd.listFiles()?.forEach { childFile ->
-                // Construct child entry name: if dirEntryName is "folder/", child is "file.txt", then "folder/file.txt"
-                addFileEntryToZipRecursive(childFile, dirEntryName + childFile.name, zos)
-            }
-        } else { // It's a file
-            FileInputStream(fileToAdd).use { fis ->
-                BufferedInputStream(fis).use { bis ->
-                    val fileEntry = java.util.zip.ZipEntry(entryNameInZip)
-                    zos.putNextEntry(fileEntry)
-                    bis.copyTo(zos)
-                    zos.closeEntry()
-                    Log.d(TAG, "FileShare: Added file to ZIP: $entryNameInZip, size: ${fileToAdd.length()}")
-                }
-            }
-        }
-    }
-
-    private fun ensureDirectoryExists(path: String) {
-        val dir = File(path)
-        if (!dir.exists()) {
-            if (!dir.mkdirs()) {
-                Log.w(TAG, "FileShare: Failed to create directory: $path")
-            }
-        }
+        Log.i(TAG, "FileShare: Terminating session. Reason: $reason")
+        // Add any specific file share session cleanup logic here
+        currentFileShareToken = null
+        _fileShareState.value = FileShareState.Terminated
     }
 
     override fun onCleared() {
         super.onCleared()
-        stopObservingMessages() // Screen share general messages
-        timeoutJob?.cancel() // Screen share session request timeout
+        stopObservingMessages()
+        timeoutJob?.cancel()
         terminateFileShareSession("ViewModel cleared")
+        webSocketService.disconnect() // Ensure WebSocket is closed
+        webRTCManager.release() // Release WebRTC resources
+    }
+    companion object {
+        private const val BUFFER_SIZE = 4096
     }
 }
 
+
+
+// SessionState and FileShareState remain the same
 sealed class SessionState {
     object Idle : SessionState()
     object Requesting : SessionState()
@@ -675,22 +761,36 @@ sealed class SessionState {
     object Streaming : SessionState()
 }
 
-// FileShareState sealed class
 sealed class FileShareState {
     object Idle : FileShareState()
-    object Requesting : FileShareState()
-    data class SessionDecisionPending(val tokenForSession: String) : FileShareState()
-    data class Active(val tokenForSession: String) : FileShareState()
+    object Requesting : FileShareState() // If you have a state for requesting a file share session
+    data class SessionDecisionPending(val tokenForSession: String) : FileShareState() // If applicable
+
+    // States relevant to the "upload_files" (download to Android) scenario
+    data class UploadingToAndroid( // Renamed from the error, but this is what the code uses
+        val tokenForSession: String,
+        val downloadUrl: String,
+        val targetPathOnAndroid: String
+    ) : FileShareState()
+
+    data class Active(val tokenForSession: String) : FileShareState() // General active file sharing state
+
+    // States for browsing (if you want to track this specifically)
     data class Browsing(val tokenForSession: String, val path: String) : FileShareState()
-    data class UploadingToAndroid(val tokenForSession: String, val downloadUrl: String, val targetPathOnAndroid: String) : FileShareState()
+
+    // States for when Android is preparing to send files (if you implement that flow)
     data class PreparingDownloadFromAndroid(val tokenForSession: String, val paths: List<String>) : FileShareState()
     data class ReadyForDownloadFromAndroid(val tokenForSession: String, val androidHostedUrl: String) : FileShareState()
+
+    // General error state for file sharing operations
     data class Error(val message: String, val tokenForSession: String? = null) : FileShareState()
+
     object Terminated : FileShareState()
 }
 
 // File share UI events
 sealed class FileShareUiEvent {
-    object RequestDirectoryPicker : FileShareUiEvent()
-    data class DirectorySelected(val uri: Uri) : FileShareUiEvent()
+    object RequestDirectoryPicker : FileShareUiEvent() // For SAF fallback
+    data class DirectorySelected(val uri: Uri) : FileShareUiEvent() // For SAF
+    object PermissionOrDirectoryNeeded : FileShareUiEvent() // New: To prompt user if no access method
 }
