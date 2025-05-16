@@ -20,14 +20,17 @@ import org.json.JSONObject
 import javax.inject.Inject
 import ba.unsa.etf.si.secureremotecontrol.data.webrtc.WebRTCManager
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Build
 import androidx.annotation.RequiresApi
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleOwner
 import ba.unsa.etf.si.secureremotecontrol.service.RemoteControlAccessibilityService
 import ba.unsa.etf.si.secureremotecontrol.service.ScreenSharingService
 import okhttp3.OkHttpClient
 import org.json.JSONException
 import ba.unsa.etf.si.secureremotecontrol.data.fileShare.*
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.BufferedInputStream
@@ -35,8 +38,16 @@ import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.IOException
+import android.Manifest
+import android.net.Uri
+import com.google.gson.Gson
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.collect
 import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
+import androidx.documentfile.provider.DocumentFile
 
 @HiltViewModel
 class MainViewModel @Inject constructor(
@@ -59,14 +70,44 @@ class MainViewModel @Inject constructor(
     // File Sharing State
     private val _fileShareState = MutableStateFlow<FileShareState>(FileShareState.Idle)
     val fileShareState: StateFlow<FileShareState> = _fileShareState
-    private var currentFileShareToken: String? = null // This will store the token used as sessionId
-    private var fileShareMessageObservationJob: Job? = null
+    private var currentFileShareToken: String? = null
+
     val deviceId = Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID)
+
+    // File sharing UI events
+    private val _fileShareUiEvents = MutableSharedFlow<FileShareUiEvent>()
+    val fileShareUiEvents: SharedFlow<FileShareUiEvent> = _fileShareUiEvents.asSharedFlow()
+
+    // Root directory URI for SAF
+    private var rootDirectoryUri: Uri? = null
 
     init {
         connectAndObserveMessages()
-        startObservingFileShareMessages()
 
+        // Load saved root directory URI if available
+        viewModelScope.launch {
+            val prefs = context.getSharedPreferences("file_share_prefs", Context.MODE_PRIVATE)
+            val savedUriStr = prefs.getString("root_directory_uri", null)
+            if (savedUriStr != null) {
+                try {
+                    rootDirectoryUri = Uri.parse(savedUriStr)
+                    Log.d(TAG, "Loaded saved root directory URI: $rootDirectoryUri")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to parse saved URI", e)
+                }
+            }
+        }
+
+        // Specifically observe file sharing messages
+        viewModelScope.launch {
+            try {
+                webSocketService.observeBrowseRequest().collect { browseRequest ->
+                    handleBrowseRequest(browseRequest)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to set up file sharing message observation: ${e.message}", e)
+            }
+        }
     }
 
     private fun connectAndObserveMessages() {
@@ -302,6 +343,10 @@ class MainViewModel @Inject constructor(
                         "ice-candidate" -> {
                             handleIceCandidate(response)
                         }
+                        "browse_request" -> {
+                            val browseRequestMessage = Gson().fromJson(message, BrowseRequestMessage::class.java)
+                            handleBrowseRequest(browseRequestMessage)
+                        }
                         else -> {
                             Log.d(TAG, "Unhandled message type: $messageType")
                         }
@@ -325,7 +370,6 @@ class MainViewModel @Inject constructor(
             0
         }
     }
-
 
     private fun handleSdpOffer(response: JSONObject) {
         try {
@@ -437,268 +481,146 @@ class MainViewModel @Inject constructor(
         messageObservationJob?.cancel()
         messageObservationJob = null
     }
+
     private var fileShareTimeoutJob: Job? = null
-    /*fun requestFileShareSession() {
-        if (_fileShareState.value !is FileShareState.Idle &&
-            _fileShareState.value !is FileShareState.Error &&
-            _fileShareState.value !is FileShareState.Terminated) {
-            Log.w(TAG, "FileShare: Request ignored, a file share session is already active or pending.")
-            _fileShareState.value = FileShareState.Error("Another file share session is active or pending.")
-            return
-        }
 
+    // Request the user to select a directory
+    fun requestDirectoryAccess() {
         viewModelScope.launch {
-            val token = tokenDataStore.token.firstOrNull()
-            if (token.isNullOrEmpty()) {
-                Log.e(TAG, "FileShare: Token not found. Cannot request file share session.")
-                _fileShareState.value = FileShareState.Error("Authentication token not found.")
-                return@launch
-            }
-
-            currentFileShareToken = token // Store the token to be used as sessionId
-            _fileShareState.value = FileShareState.Requesting
-            try {
-                // The 'token' is now sent as the 'sessionId' argument
-                webSocketService.sendRequestSessionFileshare(deviceId, token)
-                _fileShareState.value = FileShareState.SessionDecisionPending(token)
-                Log.i(TAG, "FileShare: Sent request_session_fileshare with deviceId '$deviceId' and sessionId (token) '$token'")
-            } catch (e: Exception) {
-                Log.e(TAG, "FileShare: Failed to send request_session_fileshare", e)
-                _fileShareState.value = FileShareState.Error("Failed to request file share session: ${e.message}", token)
-                currentFileShareToken = null
-            }
+            _fileShareUiEvents.emit(FileShareUiEvent.RequestDirectoryPicker)
         }
-    }*/
+    }
 
-    fun requestFileShareSession() {
-        if (_fileShareState.value !is FileShareState.Idle &&
-            _fileShareState.value !is FileShareState.Error &&
-            _fileShareState.value !is FileShareState.Terminated) {
-            Log.w(TAG, "FileShare: Request ignored, a file share session is already active or pending.")
-            _fileShareState.value = FileShareState.Error("Another file share session is active or pending.")
-            return
-        }
+    // Set the selected directory URI
+    fun setRootDirectoryUri(uri: Uri) {
+        rootDirectoryUri = uri
+        // Save the URI to preferences for persistence
+        val prefs = context.getSharedPreferences("file_share_prefs", Context.MODE_PRIVATE)
+        prefs.edit().putString("root_directory_uri", uri.toString()).apply()
 
+        // Notify UI that directory is ready
         viewModelScope.launch {
-            val token = tokenDataStore.token.firstOrNull()
-            if (token.isNullOrEmpty()) {
-                Log.e(TAG, "FileShare: Token not found. Cannot request file share session.")
-                _fileShareState.value = FileShareState.Error("Authentication token not found.")
-                return@launch
-            }
-
-            currentFileShareToken = token // Store the token to be used as sessionId
-            _fileShareState.value = FileShareState.Requesting
-
-            // Start the timeout job
-            fileShareTimeoutJob?.cancel() // Cancel any existing timeout job
-            fileShareTimeoutJob = viewModelScope.launch {
-                delay(30000L) // 30 seconds timeout
-                if (_fileShareState.value == FileShareState.Requesting) {
-                    Log.w(TAG, "FileShare: Request timed out. Terminating session.")
-                    _fileShareState.value = FileShareState.Terminated
-                }
-            }
-
-            try {
-                webSocketService.sendRequestSessionFileshare(deviceId, token)
-                Log.d(TAG, "FileShare: Request sent successfully.")
-            } catch (e: Exception) {
-                Log.e(TAG, "FileShare: Failed to send request.", e)
-                _fileShareState.value = FileShareState.Error("Failed to send file share request.")
-                fileShareTimeoutJob?.cancel() // Cancel the timeout if an error occurs
-            }
+            _fileShareUiEvents.emit(FileShareUiEvent.DirectorySelected(uri))
         }
     }
 
-
-    private fun handleFileShareResponse(decision: Boolean) {
-        fileShareTimeoutJob?.cancel() // Cancel the timeout job
-        if (decision) {
-            _fileShareState.value = FileShareState.Active(currentFileShareToken ?: "unknown_token")
-        } else {
-            _fileShareState.value = FileShareState.Terminated
-        }
-    }
-
-    private fun startObservingFileShareMessages() {
-        fileShareMessageObservationJob?.cancel()
-        fileShareMessageObservationJob = viewModelScope.launch {
-            launch {
-                webSocketService.observeDecisionFileShare().collect { message ->
-                    Log.d(TAG, "FileShare: Received decision_fileshare: $message")
-                    if (message.deviceId == deviceId && message.sessionId == currentFileShareToken) {
-                        handleFileShareResponse(message.decision)
-                    } else {
-                        Log.w(TAG, "FileShare: Mismatched decision_fileshare. Expected token: $currentFileShareToken, Got: ${message.sessionId}")
-                    }
-                }
-            }
-            launch {
-                webSocketService.observeBrowseRequest().collect { message ->
-                    Log.d(TAG, "FileShare: Received browse_request: $message")
-                    if (message.deviceId == deviceId && message.sessionId == currentFileShareToken) {
-                        handleBrowseRequest(message)
-                    } else {
-                        Log.w(TAG, "FileShare: Mismatched browse_request. Expected token: $currentFileShareToken, Got: ${message.sessionId}")
-                    }
-                }
-            }
-            launch {
-                webSocketService.observeUploadFiles().collect { message ->
-                    Log.d(TAG, "FileShare: Received upload_files (for Android to download): $message")
-                    if (message.deviceId == deviceId && message.sessionId == currentFileShareToken) {
-                        handleUploadFilesToAndroid(message)
-                    } else {
-                        Log.w(TAG, "FileShare: Mismatched upload_files. Expected token: $currentFileShareToken, Got: ${message.sessionId}")
-                    }
-                }
-            }
-            launch {
-                webSocketService.observeDownloadRequest().collect { message ->
-                    Log.d(TAG, "FileShare: Received download_request (for Android to prepare ZIP): $message")
-                    if (message.deviceId == deviceId && message.sessionId == currentFileShareToken) {
-                        handleDownloadRequestFromAndroid(message)
-                    } else {
-                        Log.w(TAG, "FileShare: Mismatched download_request. Expected token: $currentFileShareToken, Got: ${message.sessionId}")
-                    }
-                }
-            }
-        }
-        Log.d(TAG, "FileShare: Started observing file share specific messages.")
-    }
-
-    private fun handleUploadFilesToAndroid(message: UploadFilesMessage){
-
-    }
+    // Handle browse request with SAF
     private fun handleBrowseRequest(message: BrowseRequestMessage) {
-        val token = currentFileShareToken ?: return // Should not happen if checks are in place
-        _fileShareState.value = FileShareState.Browsing(token, message.path)
-        Log.i(TAG, "FileShare: Received browse_request for path: ${message.path} in session (token ${token})")
         viewModelScope.launch {
+            val token = tokenDataStore.token.firstOrNull()
+            if (token.isNullOrEmpty()) {
+                Log.e(TAG, "FileShare: Token not found. Cannot browse.")
+                return@launch
+            }
+
+            Log.i(TAG, "FileShare: Received browse_request for path: ${message.path} in session (token ${token})")
+
+            // Check if root directory is selected
+            if (rootDirectoryUri == null) {
+                Log.e(TAG, "FileShare: Root directory not selected. Requesting directory selection.")
+                // Request directory selection
+                _fileShareUiEvents.emit(FileShareUiEvent.RequestDirectoryPicker)
+                // Send empty response for now
+                webSocketService.sendBrowseResponse(deviceId, token, message.path, emptyList())
+                return@launch
+            }
+
             try {
-                val entries = listDirectoryContents(message.path) // Runs on Dispatchers.IO
+                // Get directory contents using SAF
+                val entries = listDirectorySAF(message.path)
+
+                Log.d(TAG, "FileShare: Found ${entries.size} entries for path ${message.path}")
+
+                // Send the response
                 webSocketService.sendBrowseResponse(
                     deviceId,
-                    token, // Send token as sessionId
+                    token,
                     message.path,
                     entries
                 )
-                if (_fileShareState.value is FileShareState.Browsing) {
-                    _fileShareState.value = FileShareState.Active(token)
-                }
+
+                Log.d(TAG, "FileShare: Browse response sent successfully with ${entries.size} entries")
             } catch (e: Exception) {
                 Log.e(TAG, "FileShare: Error browsing path ${message.path}", e)
                 webSocketService.sendBrowseResponse(deviceId, token, message.path, emptyList())
-                _fileShareState.value = FileShareState.Error("Error browsing: ${e.message}", token)
             }
         }
     }
 
-
-
-    // Helper to resolve the target path on Android.
-    // This needs careful consideration for security and permissions.
-    private fun resolvePathOnAndroid(relativePath: String): File {
-        // Example: Resolve relative to app's external files directory.
-        // IMPORTANT: If relativePath can be "../.." or absolute, this can be a security risk.
-        // Sanitize or restrict relativePath.
-        val sanitizedPath = relativePath.removePrefix("/").removePrefix("./") // Basic sanitization
-        val baseDir = context.getExternalFilesDir("shared_content") ?: context.filesDir.resolve("shared_content")
-        ensureDirectoryExists(baseDir.absolutePath)
-        return File(baseDir, sanitizedPath)
-    }
-
-
-    private suspend fun downloadAndUnzipFiles(downloadUrl: String, destinationDirectoryPath: File): Boolean = withContext(
-        Dispatchers.IO) {
-        Log.i(TAG, "FileShare: Attempting to download from $downloadUrl to ${destinationDirectoryPath.absolutePath}")
-        // Using the injected OkHttpClient
-        val request = okhttp3.Request.Builder().url(downloadUrl).build()
-        val tempZipFile = File(context.cacheDir, "download_${System.currentTimeMillis()}_${Thread.currentThread().id}.zip")
-
-        try {
-            okHttpClient.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) {
-                    Log.e(TAG, "FileShare: Download failed - HTTP ${response.code} from $downloadUrl")
-                    return@withContext false
-                }
-                response.body?.byteStream()?.use { inputStream ->
-                    FileOutputStream(tempZipFile).use { fileOut -> inputStream.copyTo(fileOut) }
-                } ?: return@withContext false
-            }
-            Log.i(TAG, "FileShare: ZIP downloaded to ${tempZipFile.absolutePath}")
-
-            // Unzip directly into the destinationDirectoryPath
-            ensureDirectoryExists(destinationDirectoryPath.absolutePath)
-            ZipInputStream(BufferedInputStream(FileInputStream(tempZipFile))).use { zis ->
-                var zipEntry: java.util.zip.ZipEntry? = zis.nextEntry
-                while (zipEntry != null) {
-                    val newFile = File(destinationDirectoryPath, zipEntry.name)
-                    if (!newFile.canonicalPath.startsWith(destinationDirectoryPath.canonicalPath + File.separator)) {
-                        throw SecurityException("Zip Slip vulnerability: ${zipEntry.name}")
-                    }
-                    if (zipEntry.isDirectory) {
-                        newFile.mkdirs()
-                    } else {
-                        newFile.parentFile?.mkdirs()
-                        FileOutputStream(newFile).use { fos -> zis.copyTo(fos) }
-                    }
-                    zis.closeEntry()
-                    zipEntry = zis.nextEntry
-                }
-            }
-            Log.i(TAG, "FileShare: ZIP unzipped successfully into ${destinationDirectoryPath.absolutePath}")
-            return@withContext true
-        } catch (e: Exception) { // Catch generic Exception for robustness
-            Log.e(TAG, "FileShare: Exception during download/unzip for $downloadUrl to $destinationDirectoryPath", e)
-            return@withContext false
-        } finally {
-            tempZipFile.delete()
+    // List directory contents using DocumentFile and SAF
+    private suspend fun listDirectorySAF(relativePath: String): List<FileEntry> = withContext(Dispatchers.IO) {
+        val currentRootUri = rootDirectoryUri
+        if (currentRootUri == null) {
+            Log.w(TAG, "FileShare: Root directory URI not set. Cannot list contents.")
+            return@withContext emptyList()
         }
+
+        Log.d(TAG, "FileShare: Listing directory relative path: $relativePath using root URI: $currentRootUri")
+
+        var targetDocFile = DocumentFile.fromTreeUri(context, currentRootUri)
+
+        if (targetDocFile == null || !targetDocFile.exists()) {
+            Log.e(TAG, "FileShare: Could not access root directory: $currentRootUri")
+            return@withContext emptyList()
+        }
+
+        // Navigate to the specified relative path if it's not the root
+        if (relativePath != "/" && relativePath.isNotEmpty()) {
+            val pathSegments = relativePath.trim('/').split('/')
+            for (segment in pathSegments) {
+                if (segment.isNotEmpty()) {
+                    val childDoc = targetDocFile?.findFile(segment)
+                    if (childDoc == null || !childDoc.exists()) {
+                        Log.w(TAG, "FileShare: Path segment not found: $segment in $relativePath")
+                        return@withContext emptyList()
+                    }
+                    targetDocFile = childDoc
+                }
+            }
+        }
+
+        if (targetDocFile == null || !targetDocFile.isDirectory) {
+            Log.w(TAG, "FileShare: Target path is not a directory: $relativePath")
+            return@withContext emptyList()
+        }
+
+        Log.d(TAG, "FileShare: Listing contents of: ${targetDocFile.uri}")
+
+        // List all files in the directory
+        val entries = mutableListOf<FileEntry>()
+
+        targetDocFile.listFiles().forEach { file ->
+            val name = file.name ?: "Unknown"
+            val type = if (file.isDirectory) "folder" else "file"
+            val size = if (file.isFile) file.length() else null
+
+            entries.add(FileEntry(name = name, type = type, size = size))
+        }
+
+        Log.d(TAG, "FileShare: Found ${entries.size} entries")
+        return@withContext entries
     }
 
+    // For legacy purposes, keep the old method but call the SAF method
+    private suspend fun listDirectoryContents(relativePath: String): List<FileEntry> {
+        return listDirectorySAF(relativePath)
+    }
+
+    private fun handleUploadFilesToAndroid(message: UploadFilesMessage) {
+        // Implementation for handling upload - would use DocumentFile for SAF
+    }
 
     private fun handleDownloadRequestFromAndroid(message: DownloadRequestMessage) {
-
+        // Implementation for handling download - would use DocumentFile for SAF
     }
 
     fun terminateFileShareSession(reason: String = "User terminated") {
-
+        // Implementation for terminating file share session
     }
-
-    // --- File System Utility Methods (listDirectoryContents, createZipFromPaths, etc.) ---
-    // (These would be similar to previous answers, ensure they use Dispatchers.IO for blocking ops)
-    // Ensure `createZipFromPaths` and `listDirectoryContents` correctly interpret paths relative to a defined root.
-
-    private suspend fun listDirectoryContents(relativePath: String): List<FileEntry> = withContext(Dispatchers.IO) {
-        Log.d(TAG, "FileShare: Listing directory relative path: $relativePath")
-        // Define a base directory. This needs to be consistent with what the Web client expects.
-        // Example: App's external files directory.
-        val baseDir = context.getExternalFilesDir(null) ?: context.filesDir
-        val targetDir = if (relativePath == "/" || relativePath.isEmpty()) baseDir else File(baseDir, relativePath)
-
-        if (!targetDir.exists() || !targetDir.isDirectory) {
-            Log.w(TAG, "FileShare: Path does not exist or is not a directory: ${targetDir.absolutePath}")
-            return@withContext emptyList()
-        }
-        Log.d(TAG, "FileShare: Listing absolute path: ${targetDir.absolutePath}")
-
-        targetDir.listFiles()?.mapNotNull { file ->
-            FileEntry(
-                name = file.name,
-                type = if (file.isDirectory) "folder" else "file",
-                size = if (file.isFile) file.length() else null
-            )
-        } ?: emptyList()
-    }
-
-
 
     // Recursive helper for zipping (from previous response)
     @Throws(IOException::class)
     private fun addFileEntryToZipRecursive(fileToAdd: File, entryNameInZip: String, zos: ZipOutputStream) {
-        // ... (implementation from previous answer: ensure entryNameInZip is correctly constructed for sub-files/dirs)
         if (fileToAdd.isDirectory) {
             // Ensure directory entries end with a slash
             val dirEntryName = if (entryNameInZip.endsWith("/")) entryNameInZip else "$entryNameInZip/"
@@ -724,11 +646,7 @@ class MainViewModel @Inject constructor(
         }
     }
 
-
-
-
     private fun ensureDirectoryExists(path: String) {
-        // ... (Implementation from previous answer) ...
         val dir = File(path)
         if (!dir.exists()) {
             if (!dir.mkdirs()) {
@@ -737,12 +655,9 @@ class MainViewModel @Inject constructor(
         }
     }
 
-
     override fun onCleared() {
         super.onCleared()
         stopObservingMessages() // Screen share general messages
-        fileShareMessageObservationJob?.cancel()
-        fileShareMessageObservationJob = null
         timeoutJob?.cancel() // Screen share session request timeout
         terminateFileShareSession("ViewModel cleared")
     }
@@ -760,7 +675,7 @@ sealed class SessionState {
     object Streaming : SessionState()
 }
 
-// FileShareState sealed class (as defined in previous answers)
+// FileShareState sealed class
 sealed class FileShareState {
     object Idle : FileShareState()
     object Requesting : FileShareState()
@@ -774,4 +689,8 @@ sealed class FileShareState {
     object Terminated : FileShareState()
 }
 
-
+// File share UI events
+sealed class FileShareUiEvent {
+    object RequestDirectoryPicker : FileShareUiEvent()
+    data class DirectorySelected(val uri: Uri) : FileShareUiEvent()
+}
