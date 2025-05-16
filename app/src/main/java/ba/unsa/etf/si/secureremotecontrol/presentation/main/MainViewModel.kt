@@ -619,7 +619,7 @@ class MainViewModel @Inject constructor(
     }
 
 
-    @Throws(IOException::class)
+    /*@Throws(IOException::class)
     private fun extractZip(zipFile: File, targetDirectory: File) {
         if (!targetDirectory.exists()) targetDirectory.mkdirs()
         ZipInputStream(BufferedInputStream(FileInputStream(zipFile))).use { zis ->
@@ -648,9 +648,239 @@ class MainViewModel @Inject constructor(
             }
         }
         Log.d(TAG, "FileShare: ZIP extraction complete to ${targetDirectory.absolutePath}")
-    }
+    }*/
+
+    // MainViewModel.kt
+
+// ... (imports and other code as before)
+
+    // MainViewModel.kt
+
+// ... (imports and other code as before)
 
     @Throws(IOException::class)
+    private fun extractZip(zipFile: File, targetDirectory: File) {
+        if (!targetDirectory.exists()) targetDirectory.mkdirs()
+        Log.i(TAG, "FileShare: extractZip started. Target: ${targetDirectory.absolutePath}, ZIP: ${zipFile.name}")
+
+        val allEntryNames = mutableListOf<String>()
+
+        // First pass: Collect all entry names
+        FileInputStream(zipFile).use { fis ->
+            ZipInputStream(BufferedInputStream(fis)).use { zisForCheck ->
+                var entry: java.util.zip.ZipEntry? = zisForCheck.nextEntry
+                while (entry != null) {
+                    allEntryNames.add(entry.name)
+                    entry = zisForCheck.nextEntry
+                }
+            }
+        }
+
+        if (allEntryNames.isEmpty()) {
+            Log.w(TAG, "FileShare: ZIP file is empty.")
+            return
+        }
+
+        var commonBasePathToStrip: String? = null
+
+        // Determine the common base path IF all entries share one.
+        // The common base path must be a directory (end with '/').
+        if (allEntryNames.isNotEmpty()) {
+            // Find the shortest entry name, as the common path cannot be longer than that.
+            var potentialPrefix = allEntryNames.minByOrNull { it.length } ?: ""
+
+            // Trim until it's a directory or empty
+            while (potentialPrefix.isNotEmpty() && !potentialPrefix.endsWith("/")) {
+                val lastSlash = potentialPrefix.lastIndexOf('/')
+                if (lastSlash == -1) { // No slash found, not a directory path
+                    potentialPrefix = ""
+                    break
+                }
+                potentialPrefix = potentialPrefix.substring(0, lastSlash + 1)
+            }
+
+            if (potentialPrefix.isNotEmpty()) {
+                var isCommonToAll = true
+                for (name in allEntryNames) {
+                    if (!name.startsWith(potentialPrefix)) {
+                        isCommonToAll = false
+                        break
+                    }
+                }
+                if (isCommonToAll) {
+                    // Check if this common prefix is essentially the *only* thing at the root level.
+                    // This means that after stripping this prefix, no entry should *start* with another directory.
+                    // Or, more simply, if this prefix truly represents a single root folder.
+                    // A simple way to check: are there any entries that are NOT this prefix,
+                    // and also NOT starting with this prefix + something else?
+                    // If all entries start with "folder/", then "folder/" is the common base.
+                    commonBasePathToStrip = potentialPrefix
+                }
+            }
+        }
+
+        Log.i(TAG, "FileShare: Determined common base path to strip: '$commonBasePathToStrip'")
+
+        // Actual extraction
+        ZipInputStream(BufferedInputStream(FileInputStream(zipFile))).use { zis ->
+            var zipEntry: java.util.zip.ZipEntry? = zis.nextEntry
+            while (zipEntry != null) {
+                var currentEntryName = zipEntry.name
+                Log.d(TAG, "FileShare: Processing ZIP entry: '$currentEntryName'")
+
+                if (commonBasePathToStrip != null && currentEntryName.startsWith(commonBasePathToStrip)) {
+                    currentEntryName = currentEntryName.substring(commonBasePathToStrip.length)
+                    Log.d(TAG, "FileShare: Stripped common base. New entry name: '$currentEntryName'")
+                }
+
+                if (currentEntryName.isEmpty()) {
+                    Log.d(TAG, "FileShare: Entry name is empty after stripping, skipping.")
+                    zis.closeEntry()
+                    zipEntry = zis.nextEntry
+                    continue
+                }
+
+                val newFile = File(targetDirectory, currentEntryName)
+                Log.d(TAG, "FileShare: Target file path on device: '${newFile.absolutePath}'")
+
+                if (zipEntry.isDirectory || currentEntryName.endsWith("/")) {
+                    if (!newFile.mkdirs() && !newFile.isDirectory) {
+                        Log.w(TAG, "FileShare: Failed to create directory: '${newFile.path}'")
+                    } else {
+                        Log.d(TAG, "FileShare: Created/Ensured directory: '${newFile.path}'")
+                    }
+                } else {
+                    Log.d(TAG, "FileShare: Extracting file to: '${newFile.path}'")
+                    newFile.parentFile?.let {
+                        if (!it.exists() && !it.mkdirs() && !it.isDirectory) {
+                            Log.w(TAG, "FileShare: Failed to create parent directory: '${it.path}'")
+                        } else {
+                            Log.d(TAG, "FileShare: Ensured parent directory exists: '${it.path}'")
+                        }
+                    }
+                    try {
+                        FileOutputStream(newFile).use { fos ->
+                            BufferedOutputStream(fos).use { bos ->
+                                zis.copyTo(bos)
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "FileShare: Error writing file '${newFile.path}'", e)
+                    }
+                }
+                zis.closeEntry()
+                zipEntry = zis.nextEntry
+            }
+        }
+        Log.i(TAG, "FileShare: ZIP extraction complete to ${targetDirectory.absolutePath}")
+    }
+
+
+    @Throws(IOException::class)
+    private fun extractZipToSaf(zipFile: File, targetSafDirectory: DocumentFile) {
+        Log.i(TAG, "FileShare SAF: extractZipToSaf started. Target SAF URI: ${targetSafDirectory.uri}, ZIP: ${zipFile.name}")
+
+        val allEntryNames = mutableListOf<String>()
+        FileInputStream(zipFile).use { fis ->
+            ZipInputStream(BufferedInputStream(fis)).use { zisForCheck ->
+                var entry: java.util.zip.ZipEntry? = zisForCheck.nextEntry
+                while (entry != null) {
+                    allEntryNames.add(entry.name)
+                    entry = zisForCheck.nextEntry
+                }
+            }
+        }
+
+        if (allEntryNames.isEmpty()) {
+            Log.w(TAG, "FileShare SAF: ZIP file is empty.")
+            return
+        }
+
+        var commonBasePathToStrip: String? = null
+        if (allEntryNames.isNotEmpty()) {
+            var potentialPrefix = allEntryNames.minByOrNull { it.length } ?: ""
+            while (potentialPrefix.isNotEmpty() && !potentialPrefix.endsWith("/")) {
+                val lastSlash = potentialPrefix.lastIndexOf('/')
+                if (lastSlash == -1) { potentialPrefix = ""; break }
+                potentialPrefix = potentialPrefix.substring(0, lastSlash + 1)
+            }
+            if (potentialPrefix.isNotEmpty()) {
+                if (allEntryNames.all { it.startsWith(potentialPrefix) }) {
+                    commonBasePathToStrip = potentialPrefix
+                }
+            }
+        }
+        Log.i(TAG, "FileShare SAF: Determined common base path to strip: '$commonBasePathToStrip'")
+
+
+        ZipInputStream(BufferedInputStream(FileInputStream(zipFile))).use { zis ->
+            var zipEntry: java.util.zip.ZipEntry? = zis.nextEntry
+            while (zipEntry != null) {
+                var currentEntryName = zipEntry.name
+                Log.d(TAG, "FileShare SAF: Processing ZIP entry: '$currentEntryName'")
+
+                if (commonBasePathToStrip != null && currentEntryName.startsWith(commonBasePathToStrip)) {
+                    currentEntryName = currentEntryName.substring(commonBasePathToStrip.length)
+                    Log.d(TAG, "FileShare SAF: Stripped common base. New entry name: '$currentEntryName'")
+                }
+
+                if (currentEntryName.isEmpty()) {
+                    Log.d(TAG, "FileShare SAF: Entry name is empty after stripping, skipping.")
+                    zis.closeEntry()
+                    zipEntry = zis.nextEntry
+                    continue
+                }
+
+                if (zipEntry.isDirectory || currentEntryName.endsWith("/")) {
+                    var currentDirDoc = targetSafDirectory
+                    currentEntryName.trim('/').split('/').filter{it.isNotEmpty()}.forEach { segment -> // filter empty after split
+                        val existingDir = currentDirDoc.findFile(segment)
+                        currentDirDoc = if (existingDir != null) {
+                            if (!existingDir.isDirectory) throw IOException("SAF Path conflict: '$segment' is a file, expected directory.")
+                            existingDir
+                        } else {
+                            currentDirDoc.createDirectory(segment)
+                                ?: throw IOException("Could not create SAF directory: '$segment' in ${currentDirDoc.uri}")
+                        }
+                    }
+                } else {
+                    var parentDirDoc = targetSafDirectory
+                    val pathParts = currentEntryName.split('/')
+                    val fileName = pathParts.last()
+                    val dirPathParts = pathParts.dropLast(1)
+
+                    dirPathParts.filter{it.isNotEmpty()}.forEach { segment ->
+                        val existingDir = parentDirDoc.findFile(segment)
+                        parentDirDoc = if (existingDir != null) {
+                            if (!existingDir.isDirectory) throw IOException("SAF Path conflict: '$segment' is a file, expected parent directory.")
+                            existingDir
+                        } else {
+                            parentDirDoc.createDirectory(segment)
+                                ?: throw IOException("Could not create SAF parent directory: '$segment' for $fileName in ${parentDirDoc.uri}")
+                        }
+                    }
+                    val newFileDoc = parentDirDoc.createFile(determineMimeType(fileName), fileName)
+                        ?: throw IOException("Could not create SAF file: '$fileName' in ${parentDirDoc.uri}")
+
+                    context.contentResolver.openOutputStream(newFileDoc.uri)?.use { os ->
+                        BufferedOutputStream(os).use { bos -> zis.copyTo(bos) }
+                    } ?: throw IOException("Could not open output stream for SAF file: ${newFileDoc.uri}")
+                }
+                zis.closeEntry()
+                zipEntry = zis.nextEntry
+            }
+        }
+        Log.i(TAG, "FileShare SAF: ZIP extraction complete to ${targetSafDirectory.uri}")
+    }
+
+// ... (rest of your MainViewModel code)
+
+
+
+
+// ... (rest of MainViewModel, including companion object with BUFFER_SIZE and determineMimeType)
+
+   /* @Throws(IOException::class)
     private fun extractZipToSaf(zipFile: File, targetSafDirectory: DocumentFile) {
         ZipInputStream(BufferedInputStream(FileInputStream(zipFile))).use { zis ->
             var zipEntry: java.util.zip.ZipEntry? = zis.nextEntry
@@ -711,7 +941,8 @@ class MainViewModel @Inject constructor(
             }
         }
         Log.d(TAG, "FileShare: ZIP extraction to SAF complete to ${targetSafDirectory.uri}")
-    }
+    }*/
+
 
     // Helper to determine MIME type, can be expanded
     private fun determineMimeType(fileName: String): String {
