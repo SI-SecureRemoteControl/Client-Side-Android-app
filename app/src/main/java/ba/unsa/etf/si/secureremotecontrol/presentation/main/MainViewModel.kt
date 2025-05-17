@@ -445,25 +445,26 @@ class MainViewModel @Inject constructor(
             // 2. Determine final target directory on Android and extract
             if (hasManageExternalStoragePermission()) {
                 val androidStorageRoot = Environment.getExternalStorageDirectory()
-                // Normalize last browsed path
-                val baseAndroidPath = if (lastSuccessfulBrowsePathOnAndroid == "/") "" else lastSuccessfulBrowsePathOnAndroid.trim('/')
-                // Normalize web's remote path hint
-                val webSubPath = message.remotePath.trim('/')
-                // Combine them
-                val fullRelativePath = if (baseAndroidPath.isEmpty()) webSubPath else if (webSubPath.isEmpty()) baseAndroidPath else "$baseAndroidPath/$webSubPath"
 
-                val finalTargetDir = File(androidStorageRoot, fullRelativePath.trimStart('/'))
+                // FIXED: Simplified path construction to avoid duplication
+                // Get the last browse path without any additional processing
+                val targetPath = if (lastSuccessfulBrowsePathOnAndroid == "/" || lastSuccessfulBrowsePathOnAndroid.isEmpty()) {
+                    androidStorageRoot
+                } else {
+                    File(androidStorageRoot, lastSuccessfulBrowsePathOnAndroid.trimStart('/'))
+                }
 
-                if (!finalTargetDir.exists() && !finalTargetDir.mkdirs()) {
-                    Log.e(TAG, "FileShare: Could not create target directory (direct): ${finalTargetDir.absolutePath}")
+                if (!targetPath.exists() && !targetPath.mkdirs()) {
+                    Log.e(TAG, "FileShare: Could not create target directory (direct): ${targetPath.absolutePath}")
                     _fileShareState.value = FileShareState.Error("Failed to create target directory on Android")
                     return@withContext
                 }
-                Log.i(TAG, "FileShare: Extracting downloaded ZIP (direct access) to: ${finalTargetDir.absolutePath}")
-                extractZip(tempZipFile, finalTargetDir)
+
+                Log.i(TAG, "FileShare: Extracting downloaded ZIP (direct access) to: ${targetPath.absolutePath}")
+                extractZip(tempZipFile, targetPath)
                 _fileShareState.value = FileShareState.Active(message.sessionId ?: "unknown")
-                Log.i(TAG, "FileShare: Files downloaded and extracted successfully to (direct): ${finalTargetDir.absolutePath}")
-                withContext(Dispatchers.Main) { Toast.makeText(context, "Files received into: ${fullRelativePath.ifEmpty { "root" }}", Toast.LENGTH_LONG).show() }
+                Log.i(TAG, "FileShare: Files downloaded and extracted successfully to (direct): ${targetPath.absolutePath}")
+                withContext(Dispatchers.Main) { Toast.makeText(context, "Files received into: ${lastSuccessfulBrowsePathOnAndroid}", Toast.LENGTH_LONG).show() }
             } else {
                 // If we don't have All Files Access, request it
                 Log.e(TAG, "FileShare: No All Files Access permission available.")
@@ -529,112 +530,68 @@ class MainViewModel @Inject constructor(
         return@withContext null
     }
 
-    @Throws(IOException::class)
+   @Throws(IOException::class)
     private fun extractZip(zipFile: File, targetDirectory: File) {
         if (!targetDirectory.exists()) targetDirectory.mkdirs()
         Log.i(TAG, "FileShare: extractZip started. Target: ${targetDirectory.absolutePath}, ZIP: ${zipFile.name}")
 
-        val allEntryNames = mutableListOf<String>()
-
-        // First pass: Collect all entry names
-        FileInputStream(zipFile).use { fis ->
-            ZipInputStream(BufferedInputStream(fis)).use { zisForCheck ->
-                var entry: java.util.zip.ZipEntry? = zisForCheck.nextEntry
-                while (entry != null) {
-                    allEntryNames.add(entry.name)
-                    entry = zisForCheck.nextEntry
-                }
-            }
-        }
-
-        if (allEntryNames.isEmpty()) {
-            Log.w(TAG, "FileShare: ZIP file is empty.")
-            return
-        }
-
-        var commonBasePathToStrip: String? = null
-
-        // Determine the common base path IF all entries share one.
-        if (allEntryNames.isNotEmpty()) {
-            var potentialPrefix = allEntryNames.minByOrNull { it.length } ?: ""
-            while (potentialPrefix.isNotEmpty() && !potentialPrefix.endsWith("/")) {
-                val lastSlash = potentialPrefix.lastIndexOf('/')
-                if (lastSlash == -1) {
-                    potentialPrefix = ""
-                    break
-                }
-                potentialPrefix = potentialPrefix.substring(0, lastSlash + 1)
-            }
-
-            if (potentialPrefix.isNotEmpty()) {
-                var isCommonToAll = true
-                for (name in allEntryNames) {
-                    if (!name.startsWith(potentialPrefix)) {
-                        isCommonToAll = false
-                        break
-                    }
-                }
-                if (isCommonToAll) {
-                    commonBasePathToStrip = potentialPrefix
-                }
-            }
-        }
-
-        Log.i(TAG, "FileShare: Determined common base path to strip: '$commonBasePathToStrip'")
-
-        // Actual extraction
         ZipInputStream(BufferedInputStream(FileInputStream(zipFile))).use { zis ->
-            var zipEntry: java.util.zip.ZipEntry? = zis.nextEntry
+            var zipEntry = zis.nextEntry
             while (zipEntry != null) {
-                var currentEntryName = zipEntry.name
-                Log.d(TAG, "FileShare: Processing ZIP entry: '$currentEntryName'")
+                val entryName = zipEntry.name
 
-                if (commonBasePathToStrip != null && currentEntryName.startsWith(commonBasePathToStrip)) {
-                    currentEntryName = currentEntryName.substring(commonBasePathToStrip.length)
-                    Log.d(TAG, "FileShare: Stripped common base. New entry name: '$currentEntryName'")
+                // Strip the first path component (the top-level folder)
+                val parts = entryName.split('/').filter { it.isNotEmpty() }
+                val finalEntryName = if (parts.size > 1) {
+                    parts.drop(1).joinToString("/")
+                } else if (!entryName.endsWith("/")) {
+                    parts.lastOrNull() ?: entryName // for file directly under root
+                } else {
+                    "" // it's the root folder itself
                 }
 
-                if (currentEntryName.isEmpty()) {
-                    Log.d(TAG, "FileShare: Entry name is empty after stripping, skipping.")
+                if (finalEntryName.isEmpty()) {
                     zis.closeEntry()
                     zipEntry = zis.nextEntry
                     continue
                 }
 
-                val newFile = File(targetDirectory, currentEntryName)
-                Log.d(TAG, "FileShare: Target file path on device: '${newFile.absolutePath}'")
+                val targetFile = File(targetDirectory, finalEntryName)
+                Log.d(TAG, "FileShare: Extracting '$entryName' → '$finalEntryName' to '${targetFile.absolutePath}'")
 
-                if (zipEntry.isDirectory || currentEntryName.endsWith("/")) {
-                    if (!newFile.mkdirs() && !newFile.isDirectory) {
-                        Log.w(TAG, "FileShare: Failed to create directory: '${newFile.path}'")
-                    } else {
-                        Log.d(TAG, "FileShare: Created/Ensured directory: '${newFile.path}'")
-                    }
-                } else {
-                    Log.d(TAG, "FileShare: Extracting file to: '${newFile.path}'")
-                    newFile.parentFile?.let {
-                        if (!it.exists() && !it.mkdirs() && !it.isDirectory) {
-                            Log.w(TAG, "FileShare: Failed to create parent directory: '${it.path}'")
-                        } else {
-                            Log.d(TAG, "FileShare: Ensured parent directory exists: '${it.path}'")
+                if (zipEntry.isDirectory || entryName.endsWith('/')) {
+                    if (!targetFile.exists()) {
+                        if (!targetFile.mkdirs() && !targetFile.isDirectory) {
+                            Log.w(TAG, "FileShare: Failed to create directory: '${targetFile.path}'")
                         }
                     }
+                } else {
+                    targetFile.parentFile?.let {
+                        if (!it.exists() && !it.mkdirs() && !it.isDirectory) {
+                            Log.w(TAG, "FileShare: Failed to create parent directory: '${it.path}'")
+                        }
+                    }
+
                     try {
-                        FileOutputStream(newFile).use { fos ->
+                        FileOutputStream(targetFile).use { fos ->
                             BufferedOutputStream(fos).use { bos ->
                                 zis.copyTo(bos)
                             }
                         }
                     } catch (e: Exception) {
-                        Log.e(TAG, "FileShare: Error writing file '${newFile.path}'", e)
+                        Log.e(TAG, "FileShare: Error writing file '${targetFile.path}'", e)
                     }
                 }
+
                 zis.closeEntry()
                 zipEntry = zis.nextEntry
             }
         }
+
         Log.i(TAG, "FileShare: ZIP extraction complete to ${targetDirectory.absolutePath}")
     }
+
+
 
     // Helper to determine MIME type, can be expanded
     private fun determineMimeType(fileName: String): String {
