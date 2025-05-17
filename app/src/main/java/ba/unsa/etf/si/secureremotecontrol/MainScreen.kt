@@ -319,7 +319,6 @@ import ba.unsa.etf.si.secureremotecontrol.presentation.main.FileShareUiEvent
 import ba.unsa.etf.si.secureremotecontrol.presentation.main.MainViewModel
 import ba.unsa.etf.si.secureremotecontrol.presentation.main.SessionState
 import ba.unsa.etf.si.secureremotecontrol.utils.AccessibilityUtils
-import kotlinx.coroutines.flow.collectLatest // For collecting SharedFlow safely
 
 @Composable
 fun MainScreen(
@@ -335,7 +334,7 @@ fun MainScreen(
 
     val notificationPermissionHandler = remember { NotificationPermissionHandler(context) }
     var buttonEnabled by remember { mutableStateOf(true) }
-    var showPermissionOrDirectoryDialog by remember { mutableStateOf(false) }
+    var showAllFilesAccessDialog by remember { mutableStateOf(false) }
 
     // Launcher for All Files Access permission result
     val requestAllFilesAccessLauncher = rememberLauncherForActivityResult(
@@ -343,10 +342,15 @@ fun MainScreen(
     ) { _ ->
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             if (Environment.isExternalStorageManager()) {
-                Toast.makeText(context, "All Files Access granted. File features enabled.", Toast.LENGTH_LONG).show()
-                // Optionally, re-trigger an action or inform ViewModel
+                Toast.makeText(context, "All Files Access granted. Starting screen capture...", Toast.LENGTH_SHORT).show()
+
+                // Now that we have file permission, start screen capture
+                onStartScreenCapture { resultCode, data ->
+                    val fromId = Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID)
+                    viewModel.startStreaming(resultCode, data, fromId)
+                }
             } else {
-                Toast.makeText(context, "All Files Access is recommended for full file functionality.", Toast.LENGTH_LONG).show()
+                Toast.makeText(context, "All Files Access permission is required for file sharing.", Toast.LENGTH_LONG).show()
             }
         }
     }
@@ -356,9 +360,15 @@ fun MainScreen(
         contract = ActivityResultContracts.RequestPermission()
     ) { isGranted: Boolean ->
         if (isGranted) {
-            Toast.makeText(context, "Storage permission granted.", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, "Storage permission granted. Starting screen capture...", Toast.LENGTH_SHORT).show()
+
+            // Now that we have file permission, start screen capture
+            onStartScreenCapture { resultCode, data ->
+                val fromId = Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID)
+                viewModel.startStreaming(resultCode, data, fromId)
+            }
         } else {
-            Toast.makeText(context, "Storage permission is needed for file operations on older Android.", Toast.LENGTH_LONG).show()
+            Toast.makeText(context, "Storage permission is needed for file operations.", Toast.LENGTH_LONG).show()
         }
     }
 
@@ -367,21 +377,19 @@ fun MainScreen(
         Log.d("MainScreen", "Current session state: $sessionState")
     }
 
-    // Collect file share UI events
-    LaunchedEffect(key1 = viewModel.fileShareUiEvents) { // Use viewModel.fileShareUiEvents as key
-        viewModel.fileShareUiEvents.collectLatest { event -> // Use collectLatest
+    // Observe file share UI events from LiveData
+    DisposableEffect(viewModel) {
+        val observer = androidx.lifecycle.Observer<FileShareUiEvent> { event ->
             Log.d("MainScreen", "Received FileShareUiEvent: $event")
             when (event) {
-                is FileShareUiEvent.RequestDirectoryPicker -> {
-                    Log.d("MainScreen", "Event: RequestDirectoryPicker. This should be handled by MainActivity to launch picker.")
-                    // The actual launching of the picker (ACTION_OPEN_DOCUMENT_TREE)
-                    // should be done in MainActivity, which then calls viewModel.setSafRootDirectoryUri()
-                    // This event now signals the MainActivity to do its job.
+                is FileShareUiEvent.RequestDirectoryPicker,
+                is FileShareUiEvent.PermissionOrDirectoryNeeded -> {
+                    // Instead of launching directory picker, show All Files Access dialog
+                    showAllFilesAccessDialog = true
                 }
                 is FileShareUiEvent.DirectorySelected -> {
-                    Log.d("MainScreen", "Event: DirectorySelected URI: ${event.uri}")
-                    Toast.makeText(context, "Directory for file sharing selected.", Toast.LENGTH_SHORT).show()
-                    // If screen capture should start *after* directory selection for file sharing:
+                    // This event comes after permission has been granted, start screen capture
+                    Log.d("MainScreen", "Permission granted or directory selected, starting screen capture")
                     onStartScreenCapture { resultCode, data ->
                         val fromId = Settings.Secure.getString(
                             context.contentResolver,
@@ -390,11 +398,13 @@ fun MainScreen(
                         viewModel.startStreaming(resultCode, data, fromId)
                     }
                 }
-                is FileShareUiEvent.PermissionOrDirectoryNeeded -> {
-                    Log.d("MainScreen", "Event: PermissionOrDirectoryNeeded. Showing dialog.")
-                    showPermissionOrDirectoryDialog = true
-                }
             }
+        }
+
+        viewModel.fileShareUiEvents.observeForever(observer)
+
+        onDispose {
+            viewModel.fileShareUiEvents.removeObserver(observer)
         }
     }
 
@@ -409,15 +419,15 @@ fun MainScreen(
         }
     }
 
-    // Dialog for file access permission or directory selection
-    if (showPermissionOrDirectoryDialog) {
+    // Dialog for All Files Access permission
+    if (showAllFilesAccessDialog) {
         AlertDialog(
-            onDismissRequest = { showPermissionOrDirectoryDialog = false },
+            onDismissRequest = { showAllFilesAccessDialog = false },
             title = { Text("File Access Required") },
-            text = { Text("For file browsing and sharing, this app works best with \"All Files Access\". Alternatively, you can pick a specific directory.") },
+            text = { Text("This app requires All Files Access permission for file browsing and sharing features.") },
             confirmButton = {
                 Button(onClick = {
-                    showPermissionOrDirectoryDialog = false
+                    showAllFilesAccessDialog = false
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                         try {
                             val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION)
@@ -429,12 +439,8 @@ fun MainScreen(
                             requestAllFilesAccessLauncher.launch(intent)
                         }
                     } else {
-                        // On older Android, this button could prompt for WRITE_EXTERNAL_STORAGE if not granted
-                        if (ContextCompat.checkSelfPermission(context, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
-                            requestLegacyStoragePermissionLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
-                        } else {
-                            Toast.makeText(context, "Storage permission already granted on this Android version.", Toast.LENGTH_SHORT).show()
-                        }
+                        // On older Android, request WRITE_EXTERNAL_STORAGE
+                        requestLegacyStoragePermissionLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
                     }
                 }) {
                     Text(if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) "Grant All Files Access" else "Grant Storage Permission")
@@ -442,50 +448,38 @@ fun MainScreen(
             },
             dismissButton = {
                 Button(onClick = {
-                    showPermissionOrDirectoryDialog = false
-                    Log.d("MainScreen", "User chose to pick specific directory via SAF.")
-                    viewModel.requestDirectoryAccessViaPicker() // Triggers RequestDirectoryPicker event
+                    showAllFilesAccessDialog = false
+                    Log.d("MainScreen", "User declined to grant All Files Access")
+                    Toast.makeText(context, "File sharing features will be limited without permission", Toast.LENGTH_LONG).show()
                 }) {
-                    Text("Pick Specific Directory")
+                    Text("Later")
                 }
             }
         )
     }
 
-
     // Dialog for session confirmation
     if (sessionState is SessionState.Accepted) {
-        Log.d("MainScreen", "Should show confirmation dialog now")
+        Log.d("MainScreen", "Showing session confirmation dialog")
         AlertDialog(
             onDismissRequest = { /* Cannot dismiss by clicking outside */ },
             title = { Text("Confirm Session") },
-            text = { Text("Do you want to confirm the session? This may involve selecting a directory for file sharing if not already configured or if All Files Access is not granted.") },
+            text = { Text("Do you want to confirm this remote control session?") },
             confirmButton = {
                 Button(onClick = {
                     viewModel.sendSessionFinalConfirmation(true)
-                    // Decide whether to prompt for directory or assume MANAGE_EXTERNAL_STORAGE
-                    // If MANAGE_EXTERNAL_STORAGE is the primary way and should be granted,
-                    // this might not be needed, or check first.
-                    // For now, let's assume we always offer to pick a directory (SAF) as part of session setup.
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !Environment.isExternalStorageManager()) {
-                        Toast.makeText(context, "Session confirmed. Please select a directory for file sharing (or grant All Files Access for best experience).", Toast.LENGTH_LONG).show()
-                        viewModel.requestDirectoryAccessViaPicker() // User will pick via SAF
-                    } else if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R && ContextCompat.checkSelfPermission(context, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
-                        Toast.makeText(context, "Session confirmed. Please select a directory for file sharing (or grant Storage Permission for best experience).", Toast.LENGTH_LONG).show()
-                        viewModel.requestDirectoryAccessViaPicker()
-                    } else {
-                        // MANAGE_EXTERNAL_STORAGE is granted or it's legacy Android with permission
-                        // In this case, screen capture might start directly if no specific SAF dir is strictly needed.
-                        // Or, if you always want a SAF dir for the session, still call requestDirectoryAccessViaPicker().
-                        // Let's assume for now that if permissions are good, we proceed to streaming.
-                        // The DirectorySelected event from ViewModel will trigger onStartScreenCapture.
-                        // If no directory needs to be picked (because MANAGE_EXTERNAL_STORAGE is used by default),
-                        // then `startStreaming` needs to be called directly or after a different event.
 
-                        // For simplicity, if All Files Access is granted, we assume it's okay to start without explicit SAF selection for the session here.
-                        // The browse feature will use All Files Access. If a *specific* SAF dir was needed for this session,
-                        // the logic would be more complex.
-                        Log.d("MainScreen", "Permissions are good. Attempting to start streaming after session confirmation.")
+                    // Check for All Files Access permission and request if needed
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !Environment.isExternalStorageManager()) {
+                        Toast.makeText(context, "Session confirmed. Please grant All Files Access.", Toast.LENGTH_SHORT).show()
+                        showAllFilesAccessDialog = true
+                    } else if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R &&
+                        ContextCompat.checkSelfPermission(context, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+                        Toast.makeText(context, "Session confirmed. Please grant Storage Permission.", Toast.LENGTH_SHORT).show()
+                        requestLegacyStoragePermissionLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                    } else {
+                        // Permissions are good, start screen capture directly
+                        Log.d("MainScreen", "Permissions are good. Starting screen capture after session confirmation.")
                         onStartScreenCapture { resultCode, data ->
                             val fromId = Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID)
                             viewModel.startStreaming(resultCode, data, fromId)
@@ -533,20 +527,13 @@ fun MainScreen(
                 Text("Disconnect")
             }
             Spacer(modifier = Modifier.height(8.dp))
-            // Button to allow changing the SAF directory or prompting for All Files Access if not granted
-            Button(onClick = {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !Environment.isExternalStorageManager()) {
-                    showPermissionOrDirectoryDialog = true // Offer to grant All Files or Pick Dir
-                } else if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R && ContextCompat.checkSelfPermission(context, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
-                    showPermissionOrDirectoryDialog = true // Offer to grant legacy or Pick Dir
+
+            // Button to request All Files Access if not granted
+            if ((Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !Environment.isExternalStorageManager()) ||
+                (Build.VERSION.SDK_INT < Build.VERSION_CODES.R && ContextCompat.checkSelfPermission(context, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED)) {
+                Button(onClick = { showAllFilesAccessDialog = true }) {
+                    Text("Grant File Access Permission")
                 }
-                else {
-                    // If permissions are good, maybe they just want to pick a new SAF directory
-                    Toast.makeText(context, "All Files Access is active. You can optionally pick a specific directory via SAF.", Toast.LENGTH_LONG).show()
-                    viewModel.requestDirectoryAccessViaPicker()
-                }
-            }) {
-                Text("Configure File Access")
             }
         } else {
             Button(
@@ -554,26 +541,7 @@ fun MainScreen(
                     // Permission checks before requesting session
                     var allPermissionsOk = true
 
-                    // 1. All Files Access (Android 11+) or Legacy Storage (Android <11)
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                        if (!Environment.isExternalStorageManager()) {
-                            Toast.makeText(context, "All Files Access is recommended for file sharing. Please grant it or pick a directory later.", Toast.LENGTH_LONG).show()
-                            // Don't block session request here, let PermissionOrDirectoryNeeded handle it if file browsing is attempted
-                            // Or, uncomment below to force it before session:
-                            // showPermissionOrDirectoryDialog = true
-                            // allPermissionsOk = false
-                        }
-                    } else {
-                        if (ContextCompat.checkSelfPermission(context, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
-                            Toast.makeText(context, "Storage permission is recommended for file sharing on this Android version.", Toast.LENGTH_LONG).show()
-                            // Don't block session request here.
-                            // Or, uncomment to force:
-                            // requestLegacyStoragePermissionLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
-                            // allPermissionsOk = false
-                        }
-                    }
-
-                    // 2. Notification Permission
+                    // Check notification permission
                     if (!notificationPermissionHandler.isNotificationPermissionGranted()) {
                         Toast.makeText(context, "Notifications are not allowed. Please enable them in settings.", Toast.LENGTH_LONG).show()
                         val intent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).apply {
@@ -583,8 +551,8 @@ fun MainScreen(
                         allPermissionsOk = false
                     }
 
-                    // 3. Accessibility Service
-                    if (allPermissionsOk) { // Only check if previous crucial ones are potentially okay
+                    // Check accessibility service
+                    if (allPermissionsOk) {
                         val serviceClassName = "ba.unsa.etf.si.secureremotecontrol.service.RemoteControlAccessibilityService"
                         if (!AccessibilityUtils.isAccessibilityServiceEnabled(context, serviceClassName)) {
                             Toast.makeText(context, "Accessibility service is not enabled. Please enable it in settings.", Toast.LENGTH_LONG).show()
@@ -643,5 +611,3 @@ fun MainScreen(
         }
     }
 }
-
-

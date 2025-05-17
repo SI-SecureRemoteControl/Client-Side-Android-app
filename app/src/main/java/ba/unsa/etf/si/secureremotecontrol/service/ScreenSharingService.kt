@@ -12,8 +12,10 @@ import android.media.projection.MediaProjectionManager // Keep if needed for che
 import android.os.Binder
 import android.os.IBinder
 import android.util.Log
+import androidx.activity.viewModels
 import androidx.core.app.NotificationCompat
 import ba.unsa.etf.si.secureremotecontrol.data.webrtc.WebRTCManager
+import ba.unsa.etf.si.secureremotecontrol.presentation.main.MainViewModel
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
 
@@ -90,6 +92,8 @@ class ScreenSharingService : Service() {
         // Use START_NOT_STICKY as screen sharing requires explicit start intent
         return START_NOT_STICKY
     }
+
+
 
     private fun startScreenSharing(resultCode: Int, data: Intent, fromId: String) {
         // No need to check resultCode/data again here, already done in onStartCommand

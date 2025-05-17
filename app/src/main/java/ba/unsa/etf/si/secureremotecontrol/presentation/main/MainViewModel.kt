@@ -1,4 +1,3 @@
-
 package ba.unsa.etf.si.secureremotecontrol.presentation.main
 
 import android.Manifest
@@ -15,6 +14,8 @@ import androidx.annotation.RequiresApi
 import androidx.core.content.ContextCompat
 import androidx.documentfile.provider.DocumentFile
 import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.LiveData
+import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import ba.unsa.etf.si.secureremotecontrol.data.api.WebSocketService
@@ -41,15 +42,13 @@ import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.IOException
 import java.util.zip.ZipInputStream
-import java.util.zip.ZipOutputStream
 import javax.inject.Inject
 
-
-data class UploadFilesMessage( // Make sure this matches the JSON structure from WebSocket
-    @SerializedName("type") val type: String = "upload_files", // Should match the type in JSON
-    @SerializedName("deviceId") val fromDeviceId: String, // ID of the device that initiated the upload (e.g., web client)
+data class UploadFilesMessage(
+    @SerializedName("type") val type: String = "upload_files",
+    @SerializedName("deviceId") val fromDeviceId: String,
     @SerializedName("sessionId") val sessionId: String?,
-    @SerializedName("downloadUrl") val downloadUrl: String, // URL for Android to download from
+    @SerializedName("downloadUrl") val downloadUrl: String,
     @SerializedName("remotePath") val remotePath: String,
 )
 
@@ -60,7 +59,7 @@ class MainViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
     private val tokenDataStore: TokenDataStore,
     private val webRTCManager: WebRTCManager,
-    private val okHttpClient: OkHttpClient // Assuming this is still needed for other parts
+    private val okHttpClient: OkHttpClient
 ) : ViewModel() {
 
     private val TAG = "MainViewModel"
@@ -71,37 +70,22 @@ class MainViewModel @Inject constructor(
     private var messageObservationJob: Job? = null
     private var timeoutJob: Job? = null
 
-    // File Sharing State (remains for conceptual clarity, not directly tied to MANAGE_EXTERNAL_STORAGE)
+    // File Sharing State
     private val _fileShareState = MutableStateFlow<FileShareState>(FileShareState.Idle)
     val fileShareState: StateFlow<FileShareState> = _fileShareState
-    private var currentFileShareToken: String? = null // For file sharing sessions, if applicable
+    private var currentFileShareToken: String? = null
 
     val deviceId = Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID)
 
-    // File sharing UI events (still useful for SAF fallback or explicit SAF selection)
-    private val _fileShareUiEvents = MutableSharedFlow<FileShareUiEvent>()
-    val fileShareUiEvents: SharedFlow<FileShareUiEvent> = _fileShareUiEvents.asSharedFlow()
+    // Replace SharedFlow with LiveData for file share UI events
+    private val _fileShareUiEvents = MutableLiveData<FileShareUiEvent>()
+    val fileShareUiEvents: LiveData<FileShareUiEvent> = _fileShareUiEvents
 
-    // Root directory URI for SAF (used as a fallback or if user explicitly selects via picker)
-    private var safRootDirectoryUri: Uri? = null
-    private var lastSuccessfulBrowsePathOnAndroid: String = "/" // Default to root
+    // We'll still keep track of the last browse path for file operations
+    private var lastSuccessfulBrowsePathOnAndroid: String = "/"
 
     init {
         connectAndObserveMessages()
-
-        // Load saved SAF root directory URI if available (for SAF fallback)
-        viewModelScope.launch {
-            val prefs = context.getSharedPreferences("file_share_prefs", Context.MODE_PRIVATE)
-            val savedUriStr = prefs.getString("saf_root_directory_uri", null) // Changed key for clarity
-            if (savedUriStr != null) {
-                try {
-                    safRootDirectoryUri = Uri.parse(savedUriStr)
-                    Log.d(TAG, "Loaded saved SAF root directory URI: $safRootDirectoryUri")
-                } catch (e: Exception) {
-                    Log.e(TAG, "Failed to parse saved SAF URI", e)
-                }
-            }
-        }
 
         // Observe file sharing specific messages (like browse_request)
         viewModelScope.launch {
@@ -255,7 +239,7 @@ class MainViewModel @Inject constructor(
                             _sessionState.value = SessionState.Rejected
                         }
                         "session_confirmed" -> Log.d(TAG, "Server confirmed session start.")
-                        "offer", "ice-candidate" -> handleWebRtcSignaling(response) // Combined handler
+                        "offer", "ice-candidate" -> handleWebRtcSignaling(response)
                         "keyboard" -> {
                             val payload = response.optJSONObject("payload") ?: return@collect
                             val key = payload.getString("key")
@@ -263,16 +247,11 @@ class MainViewModel @Inject constructor(
                                 RemoteControlAccessibilityService.instance?.inputCharacter(key)
                             }
                         }
-                        "browse_request" -> { // Already handled by dedicated observer, but good to have a case
+                        "browse_request" -> {
                             Log.d(TAG, "Browse request received (also handled by dedicated observer).")
-                            // val browseRequestMessage = Gson().fromJson(message, BrowseRequestMessage::class.java)
-                            // handleBrowseRequest(browseRequestMessage)
                         }
-
                         "upload_files" -> {
                             Log.d(TAG, "Received 'upload_files' message type.")
-                            // Assuming the structure of UploadFilesMessage matches the top-level fields of jsonObject
-                            // If "deviceId", "downloadUrl", etc. are nested under a "payload", adjust parsing.
                             try {
                                 val uploadMessage = Gson().fromJson(message, UploadFilesMessage::class.java)
                                 handleUploadFilesToAndroid(uploadMessage)
@@ -290,6 +269,7 @@ class MainViewModel @Inject constructor(
             }
         }
     }
+
     private fun handleWebRtcSignaling(response: JSONObject) {
         val fromId = response.optString("fromId", "unknown_sender")
         val payload = response.optJSONObject("payload") ?: return
@@ -321,7 +301,6 @@ class MainViewModel @Inject constructor(
         }
     }
 
-
     fun getNavigationBarHeight(context: Context): Int {
         val resources = context.resources
         val resourceId = resources.getIdentifier("navigation_bar_height", "dimen", "android")
@@ -330,19 +309,44 @@ class MainViewModel @Inject constructor(
 
     @RequiresApi(Build.VERSION_CODES.O)
     fun startStreaming(resultCode: Int, data: Intent, fromId: String) {
+        Log.d(TAG, "startStreaming called with resultCode $resultCode for device $fromId")
         viewModelScope.launch {
             try {
+                // First start the WebRTC components directly
+                try {
+                    Log.d(TAG, "Initializing WebRTC with resultCode and data")
+                    webRTCManager.startScreenCapture(resultCode, data, fromId)
+                    Log.d(TAG, "WebRTC screen capture initialized successfully")
+                } catch (e: Exception) {
+                    Log.e(TAG, "ERROR: Failed to initialize WebRTC directly", e)
+                    // Continue anyway to try service method
+                }
+
+                // Then start the foreground service
                 val intent = ScreenSharingService.getStartIntent(context, resultCode, data, fromId)
+                Log.d(TAG, "Starting screen sharing service with intent")
                 context.startForegroundService(intent)
+                Log.d(TAG, "Screen sharing service started successfully")
+
+                // Update session state
                 _sessionState.value = SessionState.Streaming
             } catch (e: Exception) {
+                Log.e(TAG, "Error in startStreaming", e)
                 _sessionState.value = SessionState.Error("Failed to start streaming: ${e.localizedMessage}")
             }
         }
     }
 
+    // Add a method to notify when screen sharing has started
+    fun notifyScreenSharingStarted(fromId: String) {
+        _sessionState.value = SessionState.Streaming
+        Log.d(TAG, "Screen sharing started for device: $fromId")
+    }
+
     fun startObservingRtcMessages(lifecycleOwner: LifecycleOwner) {
-        viewModelScope.launch { webRTCManager.startObservingRtcMessages(lifecycleOwner) }
+        viewModelScope.launch {
+            webRTCManager.startObservingRtcMessages(lifecycleOwner)
+        }
     }
 
     fun resetSessionState() {
@@ -357,22 +361,23 @@ class MainViewModel @Inject constructor(
 
     // --- File Sharing Logic ---
 
-    // Request the user to select a directory (for SAF fallback)
-    fun requestDirectoryAccessViaPicker() {
-        viewModelScope.launch {
-            _fileShareUiEvents.emit(FileShareUiEvent.RequestDirectoryPicker)
-        }
+    // Changed to request ALL FILES ACCESS instead of directory picker
+    fun requestDirectoryAccess() {
+        _fileShareUiEvents.postValue(FileShareUiEvent.PermissionOrDirectoryNeeded)
+        Log.d(TAG, "Requesting All Files Access permission")
     }
 
-    // Set the selected SAF directory URI (after picker)
+    // This method will still exist but will also request All Files Access
+    fun requestDirectoryAccessViaPicker() {
+        _fileShareUiEvents.postValue(FileShareUiEvent.RequestDirectoryPicker)
+        Log.d(TAG, "Requesting All Files Access permission (via picker event)")
+    }
+
+    // Not needed anymore since we prefer All Files Access over SAF
     fun setSafRootDirectoryUri(uri: Uri) {
-        safRootDirectoryUri = uri
-        val prefs = context.getSharedPreferences("file_share_prefs", Context.MODE_PRIVATE)
-        prefs.edit().putString("saf_root_directory_uri", uri.toString()).apply()
-        Log.i(TAG, "FileShare: SAF Root Directory URI set to: $uri")
-        viewModelScope.launch {
-            _fileShareUiEvents.emit(FileShareUiEvent.DirectorySelected(uri)) // Notify UI
-        }
+        Log.i(TAG, "SAF Root Directory URI method called but not needed anymore")
+        // Notify we're ready to start screen capture if needed
+        _fileShareUiEvents.postValue(FileShareUiEvent.DirectorySelected(uri))
     }
 
     private fun handleBrowseRequest(message: BrowseRequestMessage) {
@@ -386,13 +391,11 @@ class MainViewModel @Inject constructor(
 
             try {
                 val entries = listDirectoryContents(message.path)
-                if (entries == null && !hasManageExternalStoragePermission() && safRootDirectoryUri == null) {
-                    // This means neither MANAGE_EXTERNAL_STORAGE is granted, nor a SAF URI is set.
-                    // We need to ask the user to grant MANAGE_EXTERNAL_STORAGE or pick a dir via SAF.
-                    Log.w(TAG, "FileShare: No permission for file access. MANAGE_EXTERNAL_STORAGE not granted and no SAF URI selected.")
-                    // Emitting an event to UI to handle this situation (e.g., show a message or prompt for MANAGE_EXTERNAL_STORAGE)
-                    // For now, we'll send an empty response. The UI should ideally prompt the user.
-                    _fileShareUiEvents.emit(FileShareUiEvent.PermissionOrDirectoryNeeded) // New event
+                if (entries == null && !hasManageExternalStoragePermission()) {
+                    // No access - request All Files Access
+                    Log.w(TAG, "FileShare: No permission for file access. MANAGE_EXTERNAL_STORAGE not granted.")
+                    // Post event to request All Files Access
+                    _fileShareUiEvents.postValue(FileShareUiEvent.PermissionOrDirectoryNeeded)
                     webSocketService.sendBrowseResponse(deviceId, token, message.path, emptyList())
                     return@launch
                 }
@@ -409,10 +412,10 @@ class MainViewModel @Inject constructor(
     private suspend fun handleUploadFilesToAndroid(message: UploadFilesMessage) = withContext(Dispatchers.IO) {
         Log.i(TAG, "FileShare: DOWNLOAD_TO_ANDROID started. URL: ${message.downloadUrl}, Web's remotePath: '${message.remotePath}', Last browsed Android base: '$lastSuccessfulBrowsePathOnAndroid'")
 
-        _fileShareState.value = FileShareState.UploadingToAndroid( // State indicates Android is receiving files
+        _fileShareState.value = FileShareState.UploadingToAndroid(
             tokenForSession = message.sessionId ?: currentFileShareToken ?: "unknown",
             downloadUrl = message.downloadUrl,
-            targetPathOnAndroid = lastSuccessfulBrowsePathOnAndroid // Base path on Android
+            targetPathOnAndroid = lastSuccessfulBrowsePathOnAndroid
         )
 
         val tempZipFile = File(context.cacheDir, "server_download_${System.currentTimeMillis()}.zip")
@@ -458,67 +461,20 @@ class MainViewModel @Inject constructor(
                 }
                 Log.i(TAG, "FileShare: Extracting downloaded ZIP (direct access) to: ${finalTargetDir.absolutePath}")
                 extractZip(tempZipFile, finalTargetDir)
-                _fileShareState.value = FileShareState.Active(message.sessionId ?: "unknown") // Or a DownloadComplete state
+                _fileShareState.value = FileShareState.Active(message.sessionId ?: "unknown")
                 Log.i(TAG, "FileShare: Files downloaded and extracted successfully to (direct): ${finalTargetDir.absolutePath}")
                 withContext(Dispatchers.Main) { Toast.makeText(context, "Files received into: ${fullRelativePath.ifEmpty { "root" }}", Toast.LENGTH_LONG).show() }
-
-            } else if (safRootDirectoryUri != null) {
-                var currentSafTargetDir = DocumentFile.fromTreeUri(context, safRootDirectoryUri!!)
-                if (currentSafTargetDir == null || !currentSafTargetDir.isDirectory) {
-                    Log.e(TAG, "FileShare: SAF root directory not accessible: $safRootDirectoryUri")
-                    _fileShareState.value = FileShareState.Error("SAF root not accessible")
-                    return@withContext
-                }
-
-                // Navigate to lastSuccessfulBrowsePathOnAndroid within SAF root
-                val browsePathSegments = lastSuccessfulBrowsePathOnAndroid.trim('/').split('/').filter { it.isNotEmpty() }
-                for (segment in browsePathSegments) {
-                    currentSafTargetDir = currentSafTargetDir?.findFile(segment)?.also {
-                        if (!it.isDirectory) {
-                            Log.e(TAG, "FileShare: SAF segment for browse path '$segment' is a file, not directory.")
-                            throw IOException("SAF browse path conflict: '$segment' is a file.")
-                        }
-                    } ?: throw IOException("SAF browse path segment '$segment' not found.")
-                }
-                // currentSafTargetDir now points to the Android base path (e.g., /MyFolder/Pictures)
-
-                // Create subdirectories based on message.remotePath
-                val webRemotePathSegments = message.remotePath.trim('/').split('/').filter { it.isNotEmpty() }
-                for (segment in webRemotePathSegments) {
-                    val existingSubDir = currentSafTargetDir?.findFile(segment)
-                    currentSafTargetDir = if (existingSubDir != null) {
-                        if (!existingSubDir.isDirectory) {
-                            Log.e(TAG, "FileShare: SAF segment for remotePath '$segment' is a file, not directory.")
-                            throw IOException("SAF remotePath conflict: '$segment' is a file.")
-                        }
-                        existingSubDir
-                    } else {
-                        currentSafTargetDir?.createDirectory(segment)
-                            ?: throw IOException("Could not create SAF subdirectory '$segment'.")
-                    }
-                }
-                // currentSafTargetDir now points to the final destination (e.g., /MyFolder/Pictures/Vacation Shots)
-
-                Log.i(TAG, "FileShare: Extracting downloaded ZIP (SAF) to: ${currentSafTargetDir?.uri}")
-                if (currentSafTargetDir != null) {
-                    extractZipToSaf(tempZipFile, currentSafTargetDir)
-                }
-                _fileShareState.value = FileShareState.Active(message.sessionId ?: "unknown")
-                Log.i(TAG, "FileShare: Files downloaded and extracted successfully to (SAF): ${currentSafTargetDir?.uri}")
-                withContext(Dispatchers.Main) { Toast.makeText(context, "Files received (SAF) into path ending with: ${message.remotePath.ifEmpty{"root"}}", Toast.LENGTH_LONG).show() }
-
             } else {
-                Log.e(TAG, "FileShare: No write access. Grant MANAGE_EXTERNAL_STORAGE or pick SAF directory.")
-                _fileShareState.value = FileShareState.Error("No permission on Android to save downloaded files.")
-                _fileShareUiEvents.emit(FileShareUiEvent.PermissionOrDirectoryNeeded)
+                // If we don't have All Files Access, request it
+                Log.e(TAG, "FileShare: No All Files Access permission available.")
+                _fileShareState.value = FileShareState.Error("No permission to save downloaded files")
+                _fileShareUiEvents.postValue(FileShareUiEvent.PermissionOrDirectoryNeeded)
                 return@withContext
             }
-
-        } catch (e: IOException) { // Catch specific IOExceptions from SAF navigation/creation
+        } catch (e: IOException) {
             Log.e(TAG, "FileShare: IOException during file download/extraction from server", e)
             _fileShareState.value = FileShareState.Error("IO Error: ${e.message}")
-        }
-        catch (e: Exception) {
+        } catch (e: Exception) {
             Log.e(TAG, "FileShare: General error during file download/extraction from server", e)
             _fileShareState.value = FileShareState.Error("Download/Extraction error: ${e.message}")
         } finally {
@@ -528,7 +484,6 @@ class MainViewModel @Inject constructor(
             }
         }
     }
-
 
     private suspend fun listDirectoryContents(relativePath: String): List<FileEntry>? = withContext(Dispatchers.IO) {
         Log.d(TAG, "FileShare: Attempting to list directory: '$relativePath'")
@@ -545,7 +500,7 @@ class MainViewModel @Inject constructor(
 
                 if (!targetPath.exists() || !targetPath.isDirectory) {
                     Log.w(TAG, "FileShare: Direct access path does not exist or not a directory: ${targetPath.absolutePath}")
-                    return@withContext emptyList() // Path doesn't exist or isn't a dir
+                    return@withContext emptyList()
                 }
 
                 val entries = mutableListOf<FileEntry>()
@@ -558,105 +513,21 @@ class MainViewModel @Inject constructor(
                         )
                     )
                 }
+
+                // Update last successful browse path
+                lastSuccessfulBrowsePathOnAndroid = relativePath
+
                 Log.d(TAG, "FileShare: Direct access found ${entries.size} entries in ${targetPath.absolutePath}")
                 return@withContext entries
             } catch (e: Exception) {
                 Log.e(TAG, "FileShare: Error using direct file access for '$relativePath'", e)
-                // Fall through to SAF or return null if SAF also fails
+                return@withContext null
             }
         }
 
-        // Fallback to SAF if MANAGE_EXTERNAL_STORAGE is not available or failed
-        val currentSafRootUri = safRootDirectoryUri
-        if (currentSafRootUri != null) {
-            Log.i(TAG, "FileShare: MANAGE_EXTERNAL_STORAGE not available or failed. Trying SAF with root: $currentSafRootUri")
-            try {
-                var targetDocFile = DocumentFile.fromTreeUri(context, currentSafRootUri)
-                if (targetDocFile == null || !targetDocFile.exists()) {
-                    Log.e(TAG, "FileShare: SAF root directory not accessible: $currentSafRootUri")
-                    return@withContext null // Cannot access SAF root
-                }
-
-                if (relativePath != "/" && relativePath.isNotEmpty()) {
-                    val pathSegments = relativePath.trim('/').split('/')
-                    for (segment in pathSegments) {
-                        if (segment.isNotEmpty()) {
-                            val childDoc = targetDocFile?.findFile(segment)
-                            if (childDoc == null || !childDoc.exists()) {
-                                Log.w(TAG, "FileShare: SAF path segment not found: '$segment' in '$relativePath'")
-                                return@withContext emptyList() // Path segment not found
-                            }
-                            targetDocFile = childDoc
-                        }
-                    }
-                }
-
-                if (targetDocFile == null || !targetDocFile.isDirectory) {
-                    Log.w(TAG, "FileShare: SAF target path is not a directory: '$relativePath'")
-                    return@withContext emptyList() // Target not a directory
-                }
-
-                val entries = mutableListOf<FileEntry>()
-                targetDocFile.listFiles().forEach { docFile ->
-                    entries.add(
-                        FileEntry(
-                            name = docFile.name ?: "Unknown",
-                            type = if (docFile.isDirectory) "folder" else "file",
-                            size = if (docFile.isFile) docFile.length() else null
-                        )
-                    )
-                }
-                Log.d(TAG, "FileShare: SAF found ${entries.size} entries for '$relativePath'")
-                return@withContext entries
-            } catch (e: Exception) {
-                Log.e(TAG, "FileShare: Error using SAF for '$relativePath'", e)
-                return@withContext null // SAF attempt failed
-            }
-        }
-
-        Log.w(TAG, "FileShare: No access method available for '$relativePath'. MANAGE_EXTERNAL_STORAGE not granted and no SAF root URI set/valid.")
-        return@withContext null // Neither method worked
+        Log.w(TAG, "FileShare: No All Files Access permission available for '$relativePath'.")
+        return@withContext null
     }
-
-
-    /*@Throws(IOException::class)
-    private fun extractZip(zipFile: File, targetDirectory: File) {
-        if (!targetDirectory.exists()) targetDirectory.mkdirs()
-        ZipInputStream(BufferedInputStream(FileInputStream(zipFile))).use { zis ->
-            var zipEntry: java.util.zip.ZipEntry? = zis.nextEntry
-            while (zipEntry != null) {
-                val newPath = File(targetDirectory, zipEntry.name)
-                if (zipEntry.isDirectory) {
-                    if (!newPath.mkdirs() && !newPath.isDirectory) { // Check if already exists as dir
-                        Log.w(TAG, "FileShare: Failed to create directory or already exists as file: ${newPath.path}")
-                    }
-                } else {
-                    // Ensure parent directory exists
-                    newPath.parentFile?.mkdirs()
-                    FileOutputStream(newPath).use { fos ->
-                        BufferedOutputStream(fos).use { bos ->
-                            val buffer = ByteArray(BUFFER_SIZE)
-                            var read: Int
-                            while (zis.read(buffer, 0, BUFFER_SIZE).also { read = it } != -1) {
-                                bos.write(buffer, 0, read)
-                            }
-                        }
-                    }
-                }
-                zis.closeEntry()
-                zipEntry = zis.nextEntry
-            }
-        }
-        Log.d(TAG, "FileShare: ZIP extraction complete to ${targetDirectory.absolutePath}")
-    }*/
-
-    // MainViewModel.kt
-
-// ... (imports and other code as before)
-
-    // MainViewModel.kt
-
-// ... (imports and other code as before)
 
     @Throws(IOException::class)
     private fun extractZip(zipFile: File, targetDirectory: File) {
@@ -684,15 +555,11 @@ class MainViewModel @Inject constructor(
         var commonBasePathToStrip: String? = null
 
         // Determine the common base path IF all entries share one.
-        // The common base path must be a directory (end with '/').
         if (allEntryNames.isNotEmpty()) {
-            // Find the shortest entry name, as the common path cannot be longer than that.
             var potentialPrefix = allEntryNames.minByOrNull { it.length } ?: ""
-
-            // Trim until it's a directory or empty
             while (potentialPrefix.isNotEmpty() && !potentialPrefix.endsWith("/")) {
                 val lastSlash = potentialPrefix.lastIndexOf('/')
-                if (lastSlash == -1) { // No slash found, not a directory path
+                if (lastSlash == -1) {
                     potentialPrefix = ""
                     break
                 }
@@ -708,12 +575,6 @@ class MainViewModel @Inject constructor(
                     }
                 }
                 if (isCommonToAll) {
-                    // Check if this common prefix is essentially the *only* thing at the root level.
-                    // This means that after stripping this prefix, no entry should *start* with another directory.
-                    // Or, more simply, if this prefix truly represents a single root folder.
-                    // A simple way to check: are there any entries that are NOT this prefix,
-                    // and also NOT starting with this prefix + something else?
-                    // If all entries start with "folder/", then "folder/" is the common base.
                     commonBasePathToStrip = potentialPrefix
                 }
             }
@@ -775,175 +636,6 @@ class MainViewModel @Inject constructor(
         Log.i(TAG, "FileShare: ZIP extraction complete to ${targetDirectory.absolutePath}")
     }
 
-
-    @Throws(IOException::class)
-    private fun extractZipToSaf(zipFile: File, targetSafDirectory: DocumentFile) {
-        Log.i(TAG, "FileShare SAF: extractZipToSaf started. Target SAF URI: ${targetSafDirectory.uri}, ZIP: ${zipFile.name}")
-
-        val allEntryNames = mutableListOf<String>()
-        FileInputStream(zipFile).use { fis ->
-            ZipInputStream(BufferedInputStream(fis)).use { zisForCheck ->
-                var entry: java.util.zip.ZipEntry? = zisForCheck.nextEntry
-                while (entry != null) {
-                    allEntryNames.add(entry.name)
-                    entry = zisForCheck.nextEntry
-                }
-            }
-        }
-
-        if (allEntryNames.isEmpty()) {
-            Log.w(TAG, "FileShare SAF: ZIP file is empty.")
-            return
-        }
-
-        var commonBasePathToStrip: String? = null
-        if (allEntryNames.isNotEmpty()) {
-            var potentialPrefix = allEntryNames.minByOrNull { it.length } ?: ""
-            while (potentialPrefix.isNotEmpty() && !potentialPrefix.endsWith("/")) {
-                val lastSlash = potentialPrefix.lastIndexOf('/')
-                if (lastSlash == -1) { potentialPrefix = ""; break }
-                potentialPrefix = potentialPrefix.substring(0, lastSlash + 1)
-            }
-            if (potentialPrefix.isNotEmpty()) {
-                if (allEntryNames.all { it.startsWith(potentialPrefix) }) {
-                    commonBasePathToStrip = potentialPrefix
-                }
-            }
-        }
-        Log.i(TAG, "FileShare SAF: Determined common base path to strip: '$commonBasePathToStrip'")
-
-
-        ZipInputStream(BufferedInputStream(FileInputStream(zipFile))).use { zis ->
-            var zipEntry: java.util.zip.ZipEntry? = zis.nextEntry
-            while (zipEntry != null) {
-                var currentEntryName = zipEntry.name
-                Log.d(TAG, "FileShare SAF: Processing ZIP entry: '$currentEntryName'")
-
-                if (commonBasePathToStrip != null && currentEntryName.startsWith(commonBasePathToStrip)) {
-                    currentEntryName = currentEntryName.substring(commonBasePathToStrip.length)
-                    Log.d(TAG, "FileShare SAF: Stripped common base. New entry name: '$currentEntryName'")
-                }
-
-                if (currentEntryName.isEmpty()) {
-                    Log.d(TAG, "FileShare SAF: Entry name is empty after stripping, skipping.")
-                    zis.closeEntry()
-                    zipEntry = zis.nextEntry
-                    continue
-                }
-
-                if (zipEntry.isDirectory || currentEntryName.endsWith("/")) {
-                    var currentDirDoc = targetSafDirectory
-                    currentEntryName.trim('/').split('/').filter{it.isNotEmpty()}.forEach { segment -> // filter empty after split
-                        val existingDir = currentDirDoc.findFile(segment)
-                        currentDirDoc = if (existingDir != null) {
-                            if (!existingDir.isDirectory) throw IOException("SAF Path conflict: '$segment' is a file, expected directory.")
-                            existingDir
-                        } else {
-                            currentDirDoc.createDirectory(segment)
-                                ?: throw IOException("Could not create SAF directory: '$segment' in ${currentDirDoc.uri}")
-                        }
-                    }
-                } else {
-                    var parentDirDoc = targetSafDirectory
-                    val pathParts = currentEntryName.split('/')
-                    val fileName = pathParts.last()
-                    val dirPathParts = pathParts.dropLast(1)
-
-                    dirPathParts.filter{it.isNotEmpty()}.forEach { segment ->
-                        val existingDir = parentDirDoc.findFile(segment)
-                        parentDirDoc = if (existingDir != null) {
-                            if (!existingDir.isDirectory) throw IOException("SAF Path conflict: '$segment' is a file, expected parent directory.")
-                            existingDir
-                        } else {
-                            parentDirDoc.createDirectory(segment)
-                                ?: throw IOException("Could not create SAF parent directory: '$segment' for $fileName in ${parentDirDoc.uri}")
-                        }
-                    }
-                    val newFileDoc = parentDirDoc.createFile(determineMimeType(fileName), fileName)
-                        ?: throw IOException("Could not create SAF file: '$fileName' in ${parentDirDoc.uri}")
-
-                    context.contentResolver.openOutputStream(newFileDoc.uri)?.use { os ->
-                        BufferedOutputStream(os).use { bos -> zis.copyTo(bos) }
-                    } ?: throw IOException("Could not open output stream for SAF file: ${newFileDoc.uri}")
-                }
-                zis.closeEntry()
-                zipEntry = zis.nextEntry
-            }
-        }
-        Log.i(TAG, "FileShare SAF: ZIP extraction complete to ${targetSafDirectory.uri}")
-    }
-
-// ... (rest of your MainViewModel code)
-
-
-
-
-// ... (rest of MainViewModel, including companion object with BUFFER_SIZE and determineMimeType)
-
-   /* @Throws(IOException::class)
-    private fun extractZipToSaf(zipFile: File, targetSafDirectory: DocumentFile) {
-        ZipInputStream(BufferedInputStream(FileInputStream(zipFile))).use { zis ->
-            var zipEntry: java.util.zip.ZipEntry? = zis.nextEntry
-            while (zipEntry != null) {
-                val entryName = zipEntry.name
-                if (zipEntry.isDirectory) {
-                    // Create directory structure within SAF
-                    var currentDir = targetSafDirectory
-                    entryName.trim('/').split('/').forEach { segment ->
-                        if (segment.isNotEmpty()) {
-                            val existingDir = currentDir.findFile(segment)
-                            currentDir = if (existingDir != null) {
-                                if (!existingDir.isDirectory) throw IOException("Path conflict: '$segment' is a file, expected directory.")
-                                existingDir
-                            } else {
-                                currentDir.createDirectory(segment)
-                                    ?: throw IOException("Could not create SAF directory: $segment")
-                            }
-                        }
-                    }
-                } else {
-                    // Create file within SAF structure
-                    var parentDir = targetSafDirectory
-                    val pathParts = entryName.split('/')
-                    val fileName = pathParts.last()
-                    val dirPathParts = pathParts.dropLast(1)
-
-                    dirPathParts.forEach { segment ->
-                        if (segment.isNotEmpty()) {
-                            val existingDir = parentDir.findFile(segment)
-                            parentDir = if (existingDir != null) {
-                                if (!existingDir.isDirectory) throw IOException("Path conflict: '$segment' is a file, expected directory for file parent.")
-                                existingDir
-                            } else {
-                                parentDir.createDirectory(segment)
-                                    ?: throw IOException("Could not create SAF parent directory: $segment for $fileName")
-                            }
-                        }
-                    }
-
-                    val newFile = parentDir.createFile(
-                        determineMimeType(fileName), // You might need a helper for MIME types
-                        fileName
-                    ) ?: throw IOException("Could not create SAF file: $fileName in ${parentDir.uri}")
-
-                    context.contentResolver.openOutputStream(newFile.uri)?.use { os ->
-                        BufferedOutputStream(os).use { bos ->
-                            val buffer = ByteArray(BUFFER_SIZE)
-                            var read: Int
-                            while (zis.read(buffer, 0, BUFFER_SIZE).also { read = it } != -1) {
-                                bos.write(buffer, 0, read)
-                            }
-                        }
-                    } ?: throw IOException("Could not open output stream for SAF file: ${newFile.uri}")
-                }
-                zis.closeEntry()
-                zipEntry = zis.nextEntry
-            }
-        }
-        Log.d(TAG, "FileShare: ZIP extraction to SAF complete to ${targetSafDirectory.uri}")
-    }*/
-
-
     // Helper to determine MIME type, can be expanded
     private fun determineMimeType(fileName: String): String {
         return when (fileName.substringAfterLast('.', "").lowercase()) {
@@ -951,15 +643,12 @@ class MainViewModel @Inject constructor(
             "jpg", "jpeg" -> "image/jpeg"
             "png" -> "image/png"
             "pdf" -> "application/pdf"
-            // Add more common types or use MimeTypeMap
             else -> "application/octet-stream" // Default binary type
         }
     }
 
-
     fun terminateFileShareSession(reason: String = "User terminated") {
         Log.i(TAG, "FileShare: Terminating session. Reason: $reason")
-        // Add any specific file share session cleanup logic here
         currentFileShareToken = null
         _fileShareState.value = FileShareState.Terminated
     }
@@ -969,15 +658,14 @@ class MainViewModel @Inject constructor(
         stopObservingMessages()
         timeoutJob?.cancel()
         terminateFileShareSession("ViewModel cleared")
-        webSocketService.disconnect() // Ensure WebSocket is closed
-        webRTCManager.release() // Release WebRTC resources
+        webSocketService.disconnect()
+        webRTCManager.release()
     }
+
     companion object {
         private const val BUFFER_SIZE = 4096
     }
 }
-
-
 
 // SessionState and FileShareState remain the same
 sealed class SessionState {
@@ -994,34 +682,24 @@ sealed class SessionState {
 
 sealed class FileShareState {
     object Idle : FileShareState()
-    object Requesting : FileShareState() // If you have a state for requesting a file share session
-    data class SessionDecisionPending(val tokenForSession: String) : FileShareState() // If applicable
-
-    // States relevant to the "upload_files" (download to Android) scenario
-    data class UploadingToAndroid( // Renamed from the error, but this is what the code uses
+    object Requesting : FileShareState()
+    data class SessionDecisionPending(val tokenForSession: String) : FileShareState()
+    data class UploadingToAndroid(
         val tokenForSession: String,
         val downloadUrl: String,
         val targetPathOnAndroid: String
     ) : FileShareState()
-
-    data class Active(val tokenForSession: String) : FileShareState() // General active file sharing state
-
-    // States for browsing (if you want to track this specifically)
+    data class Active(val tokenForSession: String) : FileShareState()
     data class Browsing(val tokenForSession: String, val path: String) : FileShareState()
-
-    // States for when Android is preparing to send files (if you implement that flow)
     data class PreparingDownloadFromAndroid(val tokenForSession: String, val paths: List<String>) : FileShareState()
     data class ReadyForDownloadFromAndroid(val tokenForSession: String, val androidHostedUrl: String) : FileShareState()
-
-    // General error state for file sharing operations
     data class Error(val message: String, val tokenForSession: String? = null) : FileShareState()
-
     object Terminated : FileShareState()
 }
 
-// File share UI events
+// File share UI events - simplified for the new approach
 sealed class FileShareUiEvent {
-    object RequestDirectoryPicker : FileShareUiEvent() // For SAF fallback
-    data class DirectorySelected(val uri: Uri) : FileShareUiEvent() // For SAF
-    object PermissionOrDirectoryNeeded : FileShareUiEvent() // New: To prompt user if no access method
+    object RequestDirectoryPicker : FileShareUiEvent() // Kept for backward compatibility, will request All Files Access
+    data class DirectorySelected(val uri: Uri) : FileShareUiEvent() // Signal to start screen capture
+    object PermissionOrDirectoryNeeded : FileShareUiEvent() // Prompt for All Files Access
 }
