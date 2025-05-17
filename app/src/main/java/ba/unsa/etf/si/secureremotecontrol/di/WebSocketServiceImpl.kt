@@ -489,7 +489,6 @@ class WebSocketServiceImpl @Inject constructor(
             }
         }
     }
-
     override fun stopHeartbeat() {
         heartbeatJob?.cancel()
         heartbeatJob = null
@@ -604,12 +603,13 @@ class WebSocketServiceImpl @Inject constructor(
         Log.d(TAG, "Sent browse_response: ${gson.toJson(message)}")
     }
 
-    override fun sendUploadStatus(deviceId: String, sessionId: String, status: String, message: String?) {
+    override fun sendUploadStatus(deviceId: String, sessionId: String, status: String, message: String?, path: String?) {
         val msg = UploadStatusMessage(
             deviceId = deviceId,
             sessionId = sessionId,
             status = status,
-            message = message
+            message = message,
+            path = path
         )
         sendRawMessage(gson.toJson(msg))
         Log.d(TAG, "Sent upload_status: ${gson.toJson(msg)}")

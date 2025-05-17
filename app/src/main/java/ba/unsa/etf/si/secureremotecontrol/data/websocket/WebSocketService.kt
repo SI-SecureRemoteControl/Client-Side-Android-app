@@ -21,7 +21,7 @@ interface WebSocketService {
     // Sending messages from Android
     fun sendRequestSessionFileshare(deviceId: String, sessionId: String)
     fun sendBrowseResponse(deviceId: String, sessionId: String, path: String, entries: List<FileEntry>)
-    fun sendUploadStatus(deviceId: String, sessionId: String, status: String, message: String?)
+    fun sendUploadStatus(deviceId: String, sessionId: String, status: String, message: String?, path: String?)
     fun sendDownloadResponse(deviceId: String, sessionId: String, downloadUrl: String)
 
     // Observing messages for Android

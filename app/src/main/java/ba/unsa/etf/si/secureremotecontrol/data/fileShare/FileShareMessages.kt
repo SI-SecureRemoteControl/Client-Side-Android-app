@@ -54,15 +54,21 @@ data class UploadStatusMessage( // Sent by Android
     val deviceId: String,
     val sessionId: String,
     val status: String, // "success", "failure", "progress" (optional)
-    val message: String? = null
+    val message: String? = null,
+    val path : String? = null // Optional, only if status is "progress" or "failure"
 )
 
-// ⬇️ DOWNLOAD FILES
+data class PathItem(
+    @SerializedName("name") val name: String,
+    @SerializedName("type") val type: String // e.g., "file", "folder"
+    // You could add other fields if they exist, like "size", "lastModified", etc.
+)
+
 data class DownloadRequestMessage( // Received by Android
     val type: String, // "download_request"
     val deviceId: String,
     val sessionId: String,
-    val paths: List<String>
+    val paths: List<PathItem>
 )
 
 data class DownloadResponseMessage( // Sent by Android
