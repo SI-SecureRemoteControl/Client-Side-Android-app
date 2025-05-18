@@ -263,6 +263,14 @@ class MainViewModel @Inject constructor(
                                 RemoteControlAccessibilityService.instance?.inputCharacter(key)
                             }
                         }
+
+                        "session_ended" ->{
+                            Log.d(TAG, "Session ended by server.")
+                            _sessionState.value = SessionState.Idle
+                            webRTCManager.stopScreenCapture()
+                            webRTCManager.release()
+                            timeoutJob?.cancel()
+                        }
                         "browse_request" -> {
                             Log.d(TAG, "Browse request received (also handled by dedicated observer).")
                         }
