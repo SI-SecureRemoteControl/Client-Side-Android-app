@@ -425,82 +425,6 @@ class MainViewModel @Inject constructor(
         }
     }
 
-    /*private suspend fun handleUploadFilesToAndroid(message: UploadFilesMessage) = withContext(Dispatchers.IO) {
-        Log.i(TAG, "FileShare: DOWNLOAD_TO_ANDROID started. URL: ${message.downloadUrl}, Web's remotePath: '${message.remotePath}', Last browsed Android base: '$lastSuccessfulBrowsePathOnAndroid'")
-
-        _fileShareState.value = FileShareState.UploadingToAndroid(
-            tokenForSession = message.sessionId ?: currentFileShareToken ?: "unknown",
-            downloadUrl = message.downloadUrl,
-            targetPathOnAndroid = lastSuccessfulBrowsePathOnAndroid
-        )
-
-        val tempZipFile = File(context.cacheDir, "server_download_${System.currentTimeMillis()}.zip")
-
-        try {
-            // 1. Download the ZIP file from the server
-            Log.d(TAG, "FileShare: Downloading from ${message.downloadUrl} to ${tempZipFile.absolutePath}")
-            val request = Request.Builder().url(message.downloadUrl).build()
-            okHttpClient.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) {
-                    Log.e(TAG, "FileShare: Download from server failed. Code: ${response.code}, Message: ${response.message}")
-                    _fileShareState.value = FileShareState.Error("Download failed: ${response.code} ${response.message}")
-                    return@withContext
-                }
-                response.body?.byteStream()?.use { inputStream ->
-                    FileOutputStream(tempZipFile).use { outputStream ->
-                        inputStream.copyTo(outputStream)
-                    }
-                } ?: run {
-                    Log.e(TAG, "FileShare: Download from server failed. Response body is null.")
-                    _fileShareState.value = FileShareState.Error("Download failed: Empty response from server")
-                    return@withContext
-                }
-            }
-            Log.d(TAG, "FileShare: Download from server complete. Size: ${tempZipFile.length()} bytes")
-
-            // 2. Determine final target directory on Android and extract
-            if (hasManageExternalStoragePermission()) {
-                val androidStorageRoot = Environment.getExternalStorageDirectory()
-
-                // FIXED: Simplified path construction to avoid duplication
-                // Get the last browse path without any additional processing
-                val targetPath = if (lastSuccessfulBrowsePathOnAndroid == "/" || lastSuccessfulBrowsePathOnAndroid.isEmpty()) {
-                    androidStorageRoot
-                } else {
-                    File(androidStorageRoot, lastSuccessfulBrowsePathOnAndroid.trimStart('/'))
-                }
-
-                if (!targetPath.exists() && !targetPath.mkdirs()) {
-                    Log.e(TAG, "FileShare: Could not create target directory (direct): ${targetPath.absolutePath}")
-                    _fileShareState.value = FileShareState.Error("Failed to create target directory on Android")
-                    return@withContext
-                }
-
-                Log.i(TAG, "FileShare: Extracting downloaded ZIP (direct access) to: ${targetPath.absolutePath}")
-                extractZip(tempZipFile, targetPath)
-                _fileShareState.value = FileShareState.Active(message.sessionId ?: "unknown")
-                Log.i(TAG, "FileShare: Files downloaded and extracted successfully to (direct): ${targetPath.absolutePath}")
-                withContext(Dispatchers.Main) { Toast.makeText(context, "Files received into: ${lastSuccessfulBrowsePathOnAndroid}", Toast.LENGTH_LONG).show() }
-            } else {
-                // If we don't have All Files Access, request it
-                Log.e(TAG, "FileShare: No All Files Access permission available.")
-                _fileShareState.value = FileShareState.Error("No permission to save downloaded files")
-                _fileShareUiEvents.postValue(FileShareUiEvent.PermissionOrDirectoryNeeded)
-                return@withContext
-            }
-        } catch (e: IOException) {
-            Log.e(TAG, "FileShare: IOException during file download/extraction from server", e)
-            _fileShareState.value = FileShareState.Error("IO Error: ${e.message}")
-        } catch (e: Exception) {
-            Log.e(TAG, "FileShare: General error during file download/extraction from server", e)
-            _fileShareState.value = FileShareState.Error("Download/Extraction error: ${e.message}")
-        } finally {
-            if (tempZipFile.exists()) {
-                tempZipFile.delete()
-                Log.d(TAG, "FileShare: Deleted temporary downloaded ZIP: ${tempZipFile.absolutePath}")
-            }
-        }
-    }*/
 
     private suspend fun handleUploadFilesToAndroid(message: UploadFilesMessage) = withContext(Dispatchers.IO) {
         Log.i(TAG, "FileShare: DOWNLOAD_TO_ANDROID started. URL: ${message.downloadUrl}, Web's remotePath: '${message.remotePath}', Last browsed Android base: '$lastSuccessfulBrowsePathOnAndroid'")
@@ -649,102 +573,6 @@ class MainViewModel @Inject constructor(
     }
 
 
-
-   /* private fun handleDownloadRequest(request: DownloadRequestMessage) {
-        viewModelScope.launch {
-            Log.i(TAG, "FileShare: Received download_request for paths: ${request.paths}")
-
-            val token = tokenDataStore.token.firstOrNull()
-            if (token.isNullOrEmpty()) {
-                Log.e(TAG, "FileShare: Token not found. Cannot handle download request.")
-                return@launch
-            }
-
-            // Check permissions first
-            if (!hasManageExternalStoragePermission()) {
-                Log.e(TAG, "FileShare: No All Files Access permission. Cannot provide files.")
-                _fileShareUiEvents.postValue(FileShareUiEvent.PermissionOrDirectoryNeeded)
-                return@launch
-            }
-
-            // Notify user
-            withContext(Dispatchers.Main) {
-                Toast.makeText(
-                    context,
-                    "Preparing ${request.paths.size} item(s) for download...",
-                    Toast.LENGTH_SHORT
-                ).show()
-            }
-
-            _fileShareState.value = FileShareState.PreparingDownloadFromAndroid(
-                tokenForSession = request.sessionId,
-                paths = request.paths
-            )
-
-            withContext(Dispatchers.IO) {
-                try {
-                    val downloadUrl = if (request.paths.size == 1) {
-                        // Only one file to upload
-                        val singleFile = File(request.paths.first())
-
-                        if (singleFile.exists() && singleFile.isFile) {
-                            uploadSingleFile(singleFile, request.sessionId)
-                        } else {
-                            throw IOException("Requested file does not exist or is not a regular file: ${singleFile.path}")
-                        }
-                    } else {
-                        // Multiple files: create and upload ZIP
-                        val zipFile = createZipFromPaths(request.paths)
-                        if (zipFile != null && zipFile.exists() && zipFile.length() > 0) {
-                            uploadZipToServer(zipFile, request.sessionId)
-                        } else {
-                            throw IOException("Failed to create ZIP file or ZIP file is empty")
-                        }
-                    }
-
-                    if (downloadUrl != null) {
-                        webSocketService.sendDownloadResponse(
-                            deviceId = deviceId,
-                            sessionId = request.sessionId,
-                            downloadUrl = downloadUrl
-                        )
-
-                        _fileShareState.value = FileShareState.ReadyForDownloadFromAndroid(
-                            tokenForSession = request.sessionId,
-                            androidHostedUrl = downloadUrl
-                        )
-
-                        Log.i(TAG, "FileShare: Files successfully prepared for download at $downloadUrl")
-
-                        withContext(Dispatchers.Main) {
-                            Toast.makeText(
-                                context,
-                                "Files ready for download",
-                                Toast.LENGTH_SHORT
-                            ).show()
-                        }
-                    } else {
-                        throw IOException("Upload returned null download URL")
-                    }
-                } catch (e: Exception) {
-                    Log.e(TAG, "FileShare: Error preparing files for download: ${e.message}", e)
-                    _fileShareState.value = FileShareState.Error(
-                        message = "Failed to prepare files for download: ${e.message}",
-                        tokenForSession = request.sessionId
-                    )
-
-                    withContext(Dispatchers.Main) {
-                        Toast.makeText(
-                            context,
-                            "Error preparing files: ${e.message}",
-                            Toast.LENGTH_LONG
-                        ).show()
-                    }
-                }
-            }
-        }
-    }*/
-
     private fun handleDownloadRequest(request: DownloadRequestMessage) {
         viewModelScope.launch {
             Log.i(TAG, "FileShare: Received download_request for paths: ${request.paths} in dir: $lastSuccessfulBrowsePathOnAndroid")
@@ -861,58 +689,6 @@ class MainViewModel @Inject constructor(
 
 
 
-  /*  @Throws(IOException::class)
-    private suspend fun uploadSingleFile(file: File, sessionId: String): String? = withContext(Dispatchers.IO) {
-        try {
-            // Generate a unique name for the file while preserving extension
-            val fileExtension = file.extension.let { if (it.isEmpty()) "" else ".$it" }
-            val fileName = "android_file_${deviceId}_${System.currentTimeMillis()}$fileExtension"
-            val uploadUrl = "https://remote-control-gateway-production.up.railway.app/api/upload/$fileName"
-
-            Log.i(TAG, "FileShare: Uploading single file to server: $uploadUrl")
-
-            // Determine the MIME type
-            val mimeType = when (fileExtension.lowercase()) {
-                ".pdf" -> "application/pdf"
-                ".jpg", ".jpeg" -> "image/jpeg"
-                ".png" -> "image/png"
-                ".txt" -> "text/plain"
-                ".doc", ".docx" -> "application/msword"
-                ".xls", ".xlsx" -> "application/vnd.ms-excel"
-                ".zip" -> "application/zip"
-                else -> "application/octet-stream"
-            }
-
-            // Create the request body with the file content
-
-
-            // Create the multipart request
-            val requestBodyMultipart = okhttp3.MultipartBody.Builder()
-                .setType(okhttp3.MultipartBody.FORM)
-                .addFormDataPart("file", file.name, requestBody)
-                .build()
-
-            // Create the request
-            val request = okhttp3.Request.Builder()
-                .url(uploadUrl)
-                .post(requestBodyMultipart)
-                .build()
-
-            // Execute the request
-            okHttpClient.newCall(request).execute().use { response ->
-                if (response.isSuccessful) {
-                    Log.i(TAG, "FileShare: File uploaded successfully")
-                    return@withContext uploadUrl
-                } else {
-                    Log.e(TAG, "FileShare: Upload failed: ${response.code} ${response.message}")
-                    return@withContext null
-                }
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "FileShare: Error uploading file to server: ${e.message}", e)
-            return@withContext null
-        }
-    }*/
 
     // For uploading single files
     @Throws(IOException::class)
@@ -925,9 +701,9 @@ class MainViewModel @Inject constructor(
         try {
             val fileExtension = file.extension.let { if (it.isEmpty()) "" else ".$it" }
             val generatedFileName = "android_file_${deviceId}_${System.currentTimeMillis()}$fileExtension"
-            //val eventualDownloadUrl = "https://remote-control-gateway-production.up.railway.app/download/$generatedFileName"
-            val serverUploadEndpoint = "https://remote-control-gateway-production.up.railway.app/api/download"
 
+            val serverUploadEndpoint = "https://remote-control-gateway-production.up.railway.app/api/download"
+            val originalFileName = file.name
             Log.i(TAG, "FileShare: Attempting to POST file to server endpoint: $serverUploadEndpoint with name: $generatedFileName, deviceId: $deviceId")
 
 
@@ -942,7 +718,7 @@ class MainViewModel @Inject constructor(
                 .setType(okhttp3.MultipartBody.FORM)
                 .addFormDataPart("deviceId", deviceId)
                 .addFormDataPart("sessionId", sessionId)
-                .addFormDataPart("file", generatedFileName, fileRequestBody) // file.name or generatedFileName for Content-Disposition
+                .addFormDataPart("file", originalFileName, fileRequestBody) // file.name or generatedFileName for Content-Disposition
                 .build()
 
             val request = okhttp3.Request.Builder()
