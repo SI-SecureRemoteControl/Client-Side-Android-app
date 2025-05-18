@@ -55,7 +55,8 @@ data class UploadStatusMessage( // Sent by Android
     val sessionId: String,
     val status: String, // "success", "failure", "progress" (optional)
     val message: String? = null,
-    val path : String? = null // Optional, only if status is "progress" or "failure"
+    val path : String? = null ,// Optional, only if status is "progress" or "failure"
+    val fileName: String
 )
 
 data class PathItem(

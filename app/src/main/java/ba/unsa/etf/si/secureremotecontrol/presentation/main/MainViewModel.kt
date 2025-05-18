@@ -429,6 +429,8 @@ class MainViewModel @Inject constructor(
     private suspend fun handleUploadFilesToAndroid(message: UploadFilesMessage) = withContext(Dispatchers.IO) {
         Log.i(TAG, "FileShare: DOWNLOAD_TO_ANDROID started. URL: ${message.downloadUrl}, Web's remotePath: '${message.remotePath}', Last browsed Android base: '$lastSuccessfulBrowsePathOnAndroid'")
 
+        val name= message.downloadUrl.split('/').last();
+
         _fileShareState.value = FileShareState.UploadingToAndroid(
             tokenForSession = message.sessionId ?: currentFileShareToken ?: "unknown",
             downloadUrl = message.downloadUrl,
@@ -447,13 +449,15 @@ class MainViewModel @Inject constructor(
                     Log.e(TAG, "FileShare: Download from server failed. Code: ${response.code}, Message: ${response.message}")
                     _fileShareState.value = FileShareState.Error("Download failed: ${response.code} ${response.message}")
 
+                   val name= message.downloadUrl.split('/').last();
                     // Send failure status
                     webSocketService.sendUploadStatus(
                         deviceId = deviceId,
                         sessionId = sessionId,
                         status = "error",
                         message = "Failed to download file: ${response.code} ${response.message}",
-                        path = message.remotePath
+                        path = message.remotePath,
+                        fileName = name
                     )
 
                     return@withContext
@@ -472,7 +476,8 @@ class MainViewModel @Inject constructor(
                         sessionId = sessionId,
                         status = "error",
                         message = "Download failed: Empty response from server",
-                        path = message.remotePath
+                        path = message.remotePath,
+                        fileName = name
                     )
 
                     return@withContext
@@ -502,7 +507,8 @@ class MainViewModel @Inject constructor(
                         sessionId = sessionId,
                         status = "error",
                         message = "Failed to create target directory on Android",
-                        path = message.remotePath
+                        path = message.remotePath,
+                        fileName = name
                     )
 
                     return@withContext
@@ -519,7 +525,8 @@ class MainViewModel @Inject constructor(
                     sessionId = sessionId,
                     status = "success",
                     message = "Files received successfully at ${lastSuccessfulBrowsePathOnAndroid}",
-                    path= lastSuccessfulBrowsePathOnAndroid
+                    path= lastSuccessfulBrowsePathOnAndroid,
+                    fileName = name
                 )
 
                 withContext(Dispatchers.Main) { Toast.makeText(context, "Files received into: ${lastSuccessfulBrowsePathOnAndroid}", Toast.LENGTH_LONG).show() }
@@ -534,7 +541,8 @@ class MainViewModel @Inject constructor(
                     sessionId = sessionId,
                     status = "error",
                     message = "No permission to save files on Android device",
-                    path= lastSuccessfulBrowsePathOnAndroid
+                    path= lastSuccessfulBrowsePathOnAndroid,
+                    fileName = name
                 )
 
                 _fileShareUiEvents.postValue(FileShareUiEvent.PermissionOrDirectoryNeeded)
@@ -550,7 +558,8 @@ class MainViewModel @Inject constructor(
                 sessionId = sessionId,
                 status = "error",
                 message = "IO Error: ${e.message}",
-                path= lastSuccessfulBrowsePathOnAndroid
+                path= lastSuccessfulBrowsePathOnAndroid,
+                fileName = name
             )
         } catch (e: Exception) {
             Log.e(TAG, "FileShare: General error during file download/extraction from server", e)
@@ -562,7 +571,8 @@ class MainViewModel @Inject constructor(
                 sessionId = sessionId,
                 status = "error",
                 message = "Error: ${e.message}",
-                path = lastSuccessfulBrowsePathOnAndroid
+                path = lastSuccessfulBrowsePathOnAndroid,
+                fileName = name
             )
         } finally {
             if (tempZipFile.exists()) {
