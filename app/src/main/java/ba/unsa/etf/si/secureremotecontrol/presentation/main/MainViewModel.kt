@@ -241,7 +241,10 @@ class MainViewModel @Inject constructor(
                             accessibilityService.performSwipe(startX, startY, endX, endY, durationMs)
                             Log.d(TAG, "Swipe from ($startX, $startY) to ($endX, $endY) duration $durationMs ms")
                         }
-                        "info" -> _sessionState.value = SessionState.Waiting
+                        "info" -> {
+                            if( _sessionState.value != SessionState.Streaming)
+                            _sessionState.value = SessionState.Waiting
+                        }
                         "error" -> {
                             val errorMessage = response.optString("message", "Unknown error")
                             Log.e(TAG, "Received error: $errorMessage")
@@ -266,6 +269,7 @@ class MainViewModel @Inject constructor(
 
                         "session_ended" ->{
                             Log.d(TAG, "Session ended by server.")
+                            disconnectSession()
                             _sessionState.value = SessionState.Idle
                             webRTCManager.stopScreenCapture()
                             webRTCManager.release()
@@ -334,6 +338,10 @@ class MainViewModel @Inject constructor(
     @RequiresApi(Build.VERSION_CODES.O)
     fun startStreaming(resultCode: Int, data: Intent, fromId: String) {
         Log.d(TAG, "startStreaming called with resultCode $resultCode for device $fromId")
+        if (_sessionState.value is SessionState.Streaming) {
+            Log.d(TAG, "Already streaming, skipping startStreaming.")
+            return
+        }
         viewModelScope.launch {
             try {
                 // First start the WebRTC components directly
@@ -353,9 +361,12 @@ class MainViewModel @Inject constructor(
                 Log.d(TAG, "Screen sharing service started successfully")
 
                 // Update session state
-                _sessionState.value = SessionState.Streaming
+                if( _sessionState.value != SessionState.Streaming) {
+                    _sessionState.value = SessionState.Streaming
+                }
             } catch (e: Exception) {
                 Log.e(TAG, "Error in startStreaming", e)
+
                 _sessionState.value = SessionState.Error("Failed to start streaming: ${e.localizedMessage}")
             }
         }
@@ -412,7 +423,7 @@ class MainViewModel @Inject constructor(
                 return@launch
             }
             Log.i(TAG, "FileShare: Received browse_request for path: ${message.path} in session (token ${token})")
-
+            _sessionState.value = SessionState.Streaming
             try {
                 val entries = listDirectoryContents(message.path)
                 if (entries == null && !hasManageExternalStoragePermission()) {
@@ -426,6 +437,7 @@ class MainViewModel @Inject constructor(
 
                 webSocketService.sendBrowseResponse(deviceId, token, message.path, entries ?: emptyList())
                 Log.d(TAG, "FileShare: Browse response sent for path ${message.path} with ${entries?.size ?: 0} entries.")
+                Log.w("Tag", "Session state: ${_sessionState.value}")
             } catch (e: Exception) {
                 Log.e(TAG, "FileShare: Error browsing path ${message.path}", e)
                 webSocketService.sendBrowseResponse(deviceId, token, message.path, emptyList())

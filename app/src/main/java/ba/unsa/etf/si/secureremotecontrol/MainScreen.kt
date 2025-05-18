@@ -51,7 +51,16 @@ fun MainScreen(
     ) { _ ->
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             if (Environment.isExternalStorageManager()) {
-                Toast.makeText(context, "All Files Access granted. Starting screen capture...", Toast.LENGTH_SHORT).show()
+              //  Toast.makeText(context, "All Files Access granted. Starting screen capture...", Toast.LENGTH_SHORT).show()
+            if (sessionState is SessionState.Streaming) {
+                Toast.makeText(context, "Permission granted.", Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(context, "Permission granted. Starting screen capture...", Toast.LENGTH_SHORT).show()
+                onStartScreenCapture { resultCode, data ->
+                    val fromId = Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID)
+                    viewModel.startStreaming(resultCode, data, fromId)
+                }
+            }
 
                 // Now that we have file permission, start screen capture
                 onStartScreenCapture { resultCode, data ->

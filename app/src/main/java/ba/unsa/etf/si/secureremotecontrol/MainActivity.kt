@@ -186,7 +186,6 @@ class MainActivity : ComponentActivity() {
                 allFilesAccessLauncher.launch(intent)
             }
         } else {
-            // For older Android versions, just start screen capture directly
             startScreenCapture { resultCode, data ->
                 val fromId = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID)
                 viewModel.startStreaming(resultCode, data, fromId)
