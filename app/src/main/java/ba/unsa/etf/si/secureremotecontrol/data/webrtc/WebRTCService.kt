@@ -189,7 +189,7 @@ class WebRTCService @Inject constructor(
             // Start capturing
             Log.d(TAG, "[startScreenCapture] Starting capture with resolution: ${width}x${height} @ $fps fps")
             screenCapturer?.startCapture(width, height, fps)
-            Log.d(TAG, "[startScreenCapture] Screen capture started")
+
 
             // Create the peer connection immediately
             createPeerConnection(fromId)

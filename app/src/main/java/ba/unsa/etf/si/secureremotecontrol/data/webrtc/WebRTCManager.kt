@@ -68,6 +68,10 @@ class WebRTCManager @Inject constructor(
             pendingOffer = null
         }
     }
+    fun storePendingOffer(fromId: String, sdpOffer: String) {
+        pendingOffer = Pair(fromId, sdpOffer)
+        Log.d(TAG, "Stored pending offer from $fromId for later processing")
+    }
 
     fun stopScreenCapture() {
         try {

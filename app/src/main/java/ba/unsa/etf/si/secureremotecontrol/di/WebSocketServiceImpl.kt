@@ -1,3 +1,4 @@
+
 package ba.unsa.etf.si.secureremotecontrol.data.websocket
 
 import android.util.Log
@@ -5,9 +6,8 @@ import ba.unsa.etf.si.secureremotecontrol.data.api.WebSocketService
 import ba.unsa.etf.si.secureremotecontrol.data.models.Device
 import com.google.gson.Gson
 import kotlinx.coroutines.*
-import kotlinx.coroutines.channels.awaitClose
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.flow.*
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -17,9 +17,8 @@ import org.json.JSONObject
 import javax.inject.Inject
 import javax.inject.Singleton
 import ba.unsa.etf.si.secureremotecontrol.data.api.RtcMessage
-import kotlinx.coroutines.flow.filterNotNull
-import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.flow.mapNotNull
+import ba.unsa.etf.si.secureremotecontrol.data.fileShare.*
+import com.google.gson.JsonObject
 
 @Singleton
 class WebSocketServiceImpl @Inject constructor(
@@ -27,6 +26,7 @@ class WebSocketServiceImpl @Inject constructor(
     private val gson: Gson
 ) : WebSocketService {
 
+    private val TAG = "WebSocketService"
     private var heartbeatJob: Job? = null
     private val clientScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
@@ -35,58 +35,78 @@ class WebSocketServiceImpl @Inject constructor(
     private val RETRY_DELAY_MS = 5000L // 5s
     private var retryCount = 0
 
+    // Single WebSocket instance for all operations
     private var webSocket: WebSocket? = null
     private var isConnected = false
 
+    // Message channel for broadcasting to all collectors
+    private val messageChannel = MutableSharedFlow<String>(
+        replay = 0,
+        extraBufferCapacity = 10,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST
+    )
+
     override fun connectWebSocket(): WebSocket {
-        if (isConnected) {
-            Log.d("WebSocketService", "WebSocket is already connected.")
+        if (isConnected && webSocket != null) {
+            Log.d(TAG, "WebSocket is already connected.")
             return webSocket!!
         }
 
+        Log.d(TAG, "Creating new WebSocket connection")
         val request = Request.Builder().url("wss://remote-control-gateway-production.up.railway.app/").build()
+
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
+                Log.d(TAG, "WebSocket connection opened successfully")
                 isConnected = true
-                Log.d("WebSocketService", "WebSocket connected.")
+                retryCount = 0
+            }
+
+            override fun onMessage(webSocket: WebSocket, text: String) {
+                Log.d(TAG, "Message received: $text")
+                // Emit to the shared flow for all collectors
+                clientScope.launch {
+                    messageChannel.emit(text)
+                }
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                Log.e(TAG, "WebSocket connection failed: ${t.message}")
                 isConnected = false
-                Log.e("WebSocketService", "WebSocket connection failed: ${t.message}")
+                retryConnection()
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                Log.d(TAG, "WebSocket closed: $reason")
                 isConnected = false
-                Log.d("WebSocketService", "WebSocket closed: $reason")
             }
         })
+
         return webSocket!!
     }
 
-    override fun observeMessages(): Flow<String> = callbackFlow {
-        val listener = object : WebSocketListener() {
-            override fun onMessage(webSocket: WebSocket, text: String) {
-                trySend(text)
-            }
-        }
-
-        webSocket = client.newWebSocket(
-            Request.Builder().url("wss://remote-control-gateway-production.up.railway.app/").build(),
-            listener
-        )
-
-        awaitClose {
-            webSocket?.close(1000, "Flow closed")
-        }
-    }
-    override fun sendRawMessage(message: String) {
+    override fun observeMessages(): Flow<String> {
+        // Ensure we have a WebSocket connection
         if (!isConnected) {
-            Log.e("WebSocketService", "Cannot send message: WebSocket is not connected.")
+            Log.d(TAG, "WebSocket not connected, connecting now")
             connectWebSocket()
         }
-        webSocket?.send(message)
+
+        Log.d(TAG, "Setting up message observation flow")
+        // Return the shared message channel
+        return messageChannel.asSharedFlow()
     }
+
+    override fun sendRawMessage(message: String) {
+        if (!isConnected) {
+            Log.d(TAG, "WebSocket not connected, connecting now before sending message")
+            connectWebSocket()
+        }
+
+        val success = webSocket?.send(message) ?: false
+        Log.d(TAG, "Sent raw message, success: $success")
+    }
+
     override fun sendRegistration(device: Device) {
         val message = gson.toJson(mapOf(
             "type" to "register",
@@ -95,7 +115,7 @@ class WebSocketServiceImpl @Inject constructor(
             "model" to device.model,
             "osVersion" to device.osVersion
         ))
-        webSocket?.send(message)
+        sendRawMessage(message)
         startHeartbeat(device.deviceId)
     }
 
@@ -106,8 +126,8 @@ class WebSocketServiceImpl @Inject constructor(
             "token" to token,
             "decision" to if (decision) "accepted" else "rejected"
         ))
-        Log.d("WebSocket", "Final confirmation sent: $message")
-        webSocket?.send(message)
+        Log.d(TAG, "Final confirmation sent: $message")
+        sendRawMessage(message)
     }
 
     override fun disconnect() {
@@ -122,7 +142,7 @@ class WebSocketServiceImpl @Inject constructor(
             "type" to "deregister",
             "deviceId" to device.deviceId
         ))
-        webSocket?.send(message)
+        sendRawMessage(message)
         stopHeartbeat()
     }
 
@@ -136,7 +156,6 @@ class WebSocketServiceImpl @Inject constructor(
             }
         }
     }
-
     override fun stopHeartbeat() {
         heartbeatJob?.cancel()
         heartbeatJob = null
@@ -144,33 +163,47 @@ class WebSocketServiceImpl @Inject constructor(
 
     override fun sendSessionRequest(from: String, token: String) {
         if (!isConnected) {
-            Log.e("WebSocketService", "Cannot send session request: WebSocket is not connected.")
-            return
+            Log.e(TAG, "Cannot send session request: WebSocket is not connected.")
+            connectWebSocket()
         }
         val message = gson.toJson(mapOf(
             "type" to "session_request",
             "from" to from,
             "token" to token
         ))
-        webSocket?.send(message)
-        Log.d("WebSocket", "Session request sent from $from")
+        val success = webSocket?.send(message) ?: false
+        Log.d(TAG, "Session request sent from $from, success: $success")
     }
+
+    // FIXED: Only process known RTC message types and check for payload existence
     override fun observeRtcMessages(): Flow<RtcMessage> = observeMessages()
-        .map { message ->
+        .mapNotNull { message ->
             try {
                 val jsonObject = JSONObject(message)
-                val type = jsonObject.getString("type")
-                val fromId = jsonObject.optString("fromId", "")
-                val toId = jsonObject.optString("toId", "")
-                val payload = jsonObject.getJSONObject("payload")
+                val type = jsonObject.optString("type", "")
 
-                RtcMessage(type, fromId, toId, payload)
+                // Only process RTC-specific message types
+                if (type == "offer" || type == "answer" || type == "ice-candidate") {
+                    val fromId = jsonObject.optString("fromId", "")
+                    val toId = jsonObject.optString("toId", "")
+
+                    // Check if payload exists before trying to access it
+                    if (jsonObject.has("payload")) {
+                        val payload = jsonObject.getJSONObject("payload")
+                        RtcMessage(type, fromId, toId, payload)
+                    } else {
+                        Log.w(TAG, "RTC message is missing payload: $message")
+                        null
+                    }
+                } else {
+                    // Not an RTC message, skip it silently
+                    null
+                }
             } catch (e: Exception) {
-                Log.e("WebSocketService", "Error parsing RTC message", e)
+                // Only log as debug for non-RTC messages to avoid log spam
                 null
             }
         }
-        .filterNotNull() // Filter out null values
 
     private fun sendStatusHeartbeatMessage(deviceId: String) {
         val statusMsg = JSONObject().apply {
@@ -180,49 +213,23 @@ class WebSocketServiceImpl @Inject constructor(
         }
         val sent = webSocket?.send(statusMsg.toString()) ?: false
         if (sent) {
-            Log.d("WebSocket", "Sent status/heartbeat for device: $deviceId")
+            Log.d(TAG, "Sent status/heartbeat for device: $deviceId")
         } else {
-            Log.w("WebSocket", "Failed to send status/heartbeat for device: $deviceId (WebSocket not ready?)")
+            Log.w(TAG, "Failed to send status/heartbeat for device: $deviceId (WebSocket not ready?)")
         }
     }
 
-    private fun retryConnection(url: String, deviceId: String) {
+    private fun retryConnection() {
         if (retryCount < MAX_RETRY_ATTEMPTS) {
             retryCount++
-            Log.d("WebSocket", "Retrying connection #$retryCount for $deviceId after ${RETRY_DELAY_MS}ms")
+            Log.d(TAG, "Retrying connection #$retryCount after ${RETRY_DELAY_MS}ms")
             clientScope.launch {
                 delay(RETRY_DELAY_MS)
                 connectWebSocket()
             }
         } else {
-            Log.e("WebSocket", "Max retry attempts reached ($MAX_RETRY_ATTEMPTS). Connection failed for $deviceId.")
+            Log.e(TAG, "Max retry attempts reached ($MAX_RETRY_ATTEMPTS). Connection failed.")
             retryCount = 0
-        }
-    }
-
-    private fun createWebSocketListener() = object : WebSocketListener() {
-        override fun onOpen(webSocket: WebSocket, response: okhttp3.Response) {
-            Log.d("WebSocket", "Connection opened")
-            retryCount = 0
-        }
-
-        override fun onMessage(webSocket: WebSocket, text: String) {
-            Log.d("WebSocket", "Message received: $text")
-        }
-
-        override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
-            Log.d("WebSocket", "Connection closing: $code / $reason")
-            stopHeartbeat()
-        }
-
-        override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-            Log.d("WebSocket", "Connection closed: $code / $reason")
-        }
-
-        override fun onFailure(webSocket: WebSocket, t: Throwable, response: okhttp3.Response?) {
-            Log.e("WebSocket", "Connection failed", t)
-            stopHeartbeat()
-            retryConnection("wss://remote-control-gateway-production.up.railway.app/", "deviceId") // Replace with actual URL and device ID
         }
     }
 
@@ -237,9 +244,86 @@ class WebSocketServiceImpl @Inject constructor(
                     Pair(x, y)
                 } else null
             } catch (e: Exception) {
-                Log.e("WebSocket", "Error parsing click event", e)
+                Log.e(TAG, "Error parsing click event", e)
                 null
             }
         }
 
+    // Sending messages from Android
+    override fun sendRequestSessionFileshare(deviceId: String, sessionId: String) {
+        val message = RequestSessionFileshareMessage(
+            deviceId = deviceId,
+            sessionId = sessionId
+        )
+        sendRawMessage(gson.toJson(message))
+        Log.d(TAG, "Sent request_session_fileshare: ${gson.toJson(message)}")
+    }
+
+    override fun sendBrowseResponse(deviceId: String, sessionId: String, path: String, entries: List<FileEntry>) {
+        val message = BrowseResponseMessage(
+            deviceId = deviceId,
+            sessionId = sessionId,
+            path = path,
+            entries = entries
+        )
+        sendRawMessage(gson.toJson(message))
+        Log.d(TAG, "Sent browse_response: ${gson.toJson(message)}")
+    }
+
+    override fun sendUploadStatus(deviceId: String, sessionId: String, status: String, message: String?, path: String?, fileName: String) {
+        val msg = UploadStatusMessage(
+            deviceId = deviceId,
+            sessionId = sessionId,
+            status = status,
+            message = message,
+            path = path,
+            fileName = fileName
+        )
+        sendRawMessage(gson.toJson(msg))
+        Log.d(TAG, "Sent upload_status: ${gson.toJson(msg)}")
+    }
+
+    override fun sendDownloadResponse(deviceId: String, sessionId: String, downloadUrl: String) {
+        val message = DownloadResponseMessage(
+            deviceId = deviceId,
+            sessionId = sessionId,
+            downloadUrl = downloadUrl
+        )
+        sendRawMessage(gson.toJson(message))
+        Log.d(TAG, "Sent download_response: ${gson.toJson(message)}")
+    }
+
+    // Observing messages for Android
+    // Generic helper to parse messages of a specific type
+    private inline fun <reified T> observeSpecificMessage(messageType: String): Flow<T> = observeMessages()
+        .mapNotNull { jsonString ->
+            try {
+                // A quick check for type before full parsing
+                if (!jsonString.contains("\"type\":\"$messageType\"")) {
+                    return@mapNotNull null
+                }
+
+                val jsonObject = JSONObject(jsonString)
+                if (jsonObject.optString("type", "") == messageType) {
+                    gson.fromJson(jsonString, T::class.java)
+                } else {
+                    null
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error parsing $messageType message: $jsonString", e)
+                null
+            }
+        }
+
+    override fun observeDecisionFileShare(): Flow<DecisionFileshareMessage> =
+        observeSpecificMessage("decision_fileshare")
+
+    override fun observeBrowseRequest(): Flow<BrowseRequestMessage> =
+        observeSpecificMessage("browse_request")
+
+    override fun observeUploadFiles(): Flow<UploadFilesMessage> =
+        observeSpecificMessage("upload_files")
+
+    override fun observeDownloadRequest(): Flow<DownloadRequestMessage> =
+        observeSpecificMessage("download_request")
 }
