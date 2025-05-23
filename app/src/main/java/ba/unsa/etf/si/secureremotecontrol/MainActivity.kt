@@ -1,6 +1,7 @@
 
 package ba.unsa.etf.si.secureremotecontrol
-
+import ba.unsa.etf.si.secureremotecontrol.presentation.session.SessionViewModel
+import androidx.activity.viewModels
 import NotificationPermissionHandler
 import android.app.Activity
 import android.content.Intent
@@ -16,7 +17,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.activity.viewModels
+//import androidx.activity.viewModels
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
@@ -38,7 +39,7 @@ class MainActivity : ComponentActivity() {
     lateinit var tokenDataStore: TokenDataStore
 
     private val viewModel: MainViewModel by viewModels()
-
+    private val sessionViewModel: SessionViewModel by viewModels()
     private lateinit var screenCaptureLauncher: ActivityResultLauncher<Intent>
     private lateinit var allFilesAccessLauncher: ActivityResultLauncher<Intent>
 
@@ -46,6 +47,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        sessionViewModel.onSessionStarted()
         val notificationPermissionHandler = NotificationPermissionHandler(this)
         notificationPermissionHandler.checkAndRequestNotificationPermission()
 
@@ -74,6 +76,16 @@ class MainActivity : ComponentActivity() {
                 // Start the click service separately - this is fine
                 val clickIntent = Intent(this, RemoteControlClickService::class.java)
                 startService(clickIntent)
+                ba.unsa.etf.si.secureremotecontrol.data.util.JsonLogger.log(
+                    this,
+                    "INFO",
+                    "MainActivity",
+                    "Started RemoteControlClickService"
+                )
+                val logs = ba.unsa.etf.si.secureremotecontrol.data.util.JsonLogger.readLogs(this)
+                logs.forEach {
+                    Log.d("LogEntry", "${it.timestamp} [${it.level}] ${it.tag}: ${it.message}")
+                }
                 Log.d("MainActivity", "Started RemoteControlClickService")
             } else {
                 Log.e("MainActivity", "Screen capture permission denied or invalid data.")
