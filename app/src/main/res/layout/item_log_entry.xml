@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:padding="12dp">
+
+    <TextView
+        android:id="@+id/textTimestamp"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="2025-05-24 23:00"
+        android:textStyle="bold" />
+
+    <TextView
+        android:id="@+id/textLevel"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="INFO"
+        android:textColor="#388E3C" />
+
+    <TextView
+        android:id="@+id/textTag"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="UserInteraction" />
+
+    <TextView
+        android:id="@+id/textMessage"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Click at x=120.0, y=340.0" />
+</LinearLayout>

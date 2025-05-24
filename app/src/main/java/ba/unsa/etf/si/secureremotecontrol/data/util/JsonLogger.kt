@@ -45,6 +45,8 @@ object JsonLogger {
         return gson.fromJson(logFile.readText(), type)
     }
 
+
+
     fun logScreenShareStart(context: Context) {
         log(context, "INFO", "ScreenSharing", "Screen sharing started")
     }
