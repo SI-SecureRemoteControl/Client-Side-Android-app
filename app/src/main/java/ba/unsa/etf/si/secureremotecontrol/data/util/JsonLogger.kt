@@ -11,13 +11,20 @@ object JsonLogger {
     private const val FILE_NAME = "log.json"
     private val gson = Gson()
 
-    fun log(context: Context, level: String, tag: String, message: String) {
+    fun log(
+        context: Context,
+        level: String,
+        tag: String,
+        message: String,
+        metadata: Map<String, String>? = null
+    ) {
         synchronized(this) {
             val logEntry = LogEntry(
                 timestamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date()),
                 level = level,
                 tag = tag,
-                message = message
+                message = message,
+                metadata = metadata
             )
             val logFile = File(context.filesDir, FILE_NAME)
             val logs = if (logFile.exists() && logFile.readText().isNotBlank()) {
@@ -36,5 +43,25 @@ object JsonLogger {
         if (!logFile.exists()) return emptyList()
         val type = object : TypeToken<List<LogEntry>>() {}.type
         return gson.fromJson(logFile.readText(), type)
+    }
+
+    fun logScreenShareStart(context: Context) {
+        log(context, "INFO", "ScreenSharing", "Screen sharing started")
+    }
+
+    fun logScreenShareEnd(context: Context) {
+        log(context, "INFO", "ScreenSharing", "Screen sharing stopped")
+    }
+
+    fun logClick(context: Context, x: Float, y: Float) {
+        log(context, "INPUT", "Click", "User clicked at ($x, $y)", mapOf("x" to "$x", "y" to "$y"))
+    }
+
+    fun logKeyPress(context: Context, key: String) {
+        log(context, "INPUT", "Keyboard", "Key pressed: $key", mapOf("key" to key))
+    }
+
+    fun logFileUpload(context: Context, filename: String, size: Long) {
+        log(context, "FILE", "Upload", "File uploaded: $filename", mapOf("filename" to filename, "size" to "$size"))
     }
 }

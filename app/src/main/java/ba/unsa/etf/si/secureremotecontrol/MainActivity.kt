@@ -22,8 +22,10 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import ba.unsa.etf.si.secureremotecontrol.data.datastore.TokenDataStore
+import ba.unsa.etf.si.secureremotecontrol.data.util.JsonLogger
 import ba.unsa.etf.si.secureremotecontrol.presentation.main.FileShareUiEvent
 import ba.unsa.etf.si.secureremotecontrol.presentation.main.MainViewModel
+import ba.unsa.etf.si.secureremotecontrol.presentation.session.SessionLogScreen
 import ba.unsa.etf.si.secureremotecontrol.presentation.verification.DeregistrationScreen
 import ba.unsa.etf.si.secureremotecontrol.service.RemoteControlClickService
 import ba.unsa.etf.si.secureremotecontrol.service.ScreenSharingService
@@ -47,7 +49,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        JsonLogger.log(this, "INFO", "MainActivity", "App started and onCreate invoked")
         sessionViewModel.onSessionStarted()
+        JsonLogger.log(this, "INFO", "MainActivity", "SessionViewModel.onSessionStarted called")
         val notificationPermissionHandler = NotificationPermissionHandler(this)
         notificationPermissionHandler.checkAndRequestNotificationPermission()
 
@@ -61,6 +65,8 @@ class MainActivity : ComponentActivity() {
                 // Get device ID for tracking
                 val fromId = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID)
                 Log.d("MainActivity", "Screen capture granted for device $fromId")
+                JsonLogger.logScreenShareStart(this)
+                JsonLogger.log(this, "INFO", "ScreenCapture", "User granted screen sharing permission")
 
                 // FIRST: Pass result to the callback - this is critical for ViewModel's proper initialization
                 // The callback ultimately calls viewModel.startStreaming which sets up WebRTC
@@ -89,6 +95,7 @@ class MainActivity : ComponentActivity() {
                 Log.d("MainActivity", "Started RemoteControlClickService")
             } else {
                 Log.e("MainActivity", "Screen capture permission denied or invalid data.")
+                JsonLogger.log(this, "WARN", "ScreenCapture", "User denied screen sharing permission or data null")
                 Toast.makeText(this, "Screen sharing permission denied", Toast.LENGTH_SHORT).show()
             }
         }
@@ -98,6 +105,7 @@ class MainActivity : ComponentActivity() {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 if (Environment.isExternalStorageManager()) {
                     Toast.makeText(this, "All Files Access granted. Starting screen capture.", Toast.LENGTH_SHORT).show()
+                    JsonLogger.log(this, "INFO", "Permissions", "All Files Access granted in launcher callback, starting screen capture")
 
                     // Now that we have file permission, start screen capture
                     startScreenCapture { resultCode, data ->
@@ -106,6 +114,7 @@ class MainActivity : ComponentActivity() {
                     }
                 } else {
                     Toast.makeText(this, "All Files Access permission is required for file sharing.", Toast.LENGTH_LONG).show()
+                    JsonLogger.log(this, "WARN", "Permissions", "All Files Access NOT granted in launcher callback")
                 }
             }
         }
@@ -159,6 +168,9 @@ class MainActivity : ComponentActivity() {
                             },
                             onStopScreenCapture = {
                                 stopScreenCapture()
+                            },
+                            onShowLogs = {
+                                navController.navigate("sessionLog")
                             }
                         )
                     }
@@ -173,6 +185,11 @@ class MainActivity : ComponentActivity() {
                             }
                         )
                     }
+
+                    composable("sessionLog") {
+                        SessionLogScreen()
+                    }
+
                 }
             }
         }
@@ -191,16 +208,21 @@ class MainActivity : ComponentActivity() {
                 val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION)
                 intent.data = Uri.parse("package:$packageName")
                 allFilesAccessLauncher.launch(intent)
+                JsonLogger.log(this, "INFO", "Permissions", "Launched app-specific All Files Access permission intent")
             } catch (e: Exception) {
                 Log.e("MainActivity", "Could not launch All Files Access permission screen", e)
+                JsonLogger.log(this, "ERROR", "Permissions", "Failed to launch app-specific All Files Access permission screen. Falling back to general.")
                 // Fallback to general settings
                 val intent = Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
                 allFilesAccessLauncher.launch(intent)
+                JsonLogger.log(this, "INFO", "Permissions", "Launched general All Files Access permission intent")
             }
         } else {
+            JsonLogger.log(this, "INFO", "Permissions", "SDK < R, skipping All Files Access and starting screen capture")
             startScreenCapture { resultCode, data ->
                 val fromId = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID)
                 viewModel.startStreaming(resultCode, data, fromId)
+                JsonLogger.log(this, "INFO", "Permissions", "Started screen capture directly (SDK < R)")
             }
         }
     }
@@ -220,11 +242,14 @@ class MainActivity : ComponentActivity() {
         val intent = ScreenSharingService.getStopIntent(this)
         stopService(intent)
         Log.d("MainActivity", "Screen sharing stopped.")
+        JsonLogger.logScreenShareEnd(this)
+        JsonLogger.log(this, "INFO", "MainActivity", "User stopped screen sharing")
     }
 
     override fun onDestroy() {
         super.onDestroy()
         // Make sure to remove the observer to prevent memory leaks
         viewModel.fileShareUiEvents.removeObserver { /* observer */ }
+        JsonLogger.log(this, "INFO", "MainActivity", "App destroyed and observer removed")
     }
 }

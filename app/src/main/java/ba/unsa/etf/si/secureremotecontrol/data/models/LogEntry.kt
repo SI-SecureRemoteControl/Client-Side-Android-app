@@ -4,5 +4,6 @@ data class LogEntry(
     val timestamp: String,
     val level: String,
     val tag: String,
-    val message: String
+    val message: String,
+    val metadata: Map<String, String>? = null
 )
