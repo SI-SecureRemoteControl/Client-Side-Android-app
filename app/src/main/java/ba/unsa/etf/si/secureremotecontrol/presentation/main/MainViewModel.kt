@@ -45,6 +45,7 @@ import java.io.IOException
 import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
 import javax.inject.Inject
+import ba.unsa.etf.si.secureremotecontrol.data.util.JsonLogger
 
 data class UploadFilesMessage(
     @SerializedName("type") val type: String = "upload_files",
@@ -205,6 +206,7 @@ class MainViewModel @Inject constructor(
         messageObservationJob = viewModelScope.launch {
             webSocketService.observeMessages().collect { message ->
                 Log.d(TAG, "Raw message received: $message")
+
                 try {
                     val response = JSONObject(message)
                     val messageType = response.optString("type", "")
@@ -222,6 +224,8 @@ class MainViewModel @Inject constructor(
                             val absoluteY = y * screenHeight
                             accessibilityService.performClick(absoluteX, absoluteY)
                             Log.d(TAG, "Click at ($absoluteX, $absoluteY)")
+                            logClick(absoluteX, absoluteY)
+                            JsonLogger.log(context, "INFO", "UserInteraction", "Click at x=$absoluteX, y=$absoluteY")
                         }
                         "swipe" -> {
                             val payload = response.optJSONObject("payload") ?: return@collect
@@ -239,7 +243,9 @@ class MainViewModel @Inject constructor(
                             val baseDuration = (distance / velocity).toLong()
                             val durationMs = Math.max(100, Math.min(baseDuration, 800))
                             accessibilityService.performSwipe(startX, startY, endX, endY, durationMs)
+                            logSwipe(startX, startY, endX, endY, durationMs)
                             Log.d(TAG, "Swipe from ($startX, $startY) to ($endX, $endY) duration $durationMs ms")
+                            JsonLogger.log(context, "INFO", "UserInteraction", "Swipe from ($startX, $startY) to ($endX, $endY), duration=${durationMs}ms")
                         }
                         "info" -> {
                             if( _sessionState.value != SessionState.Streaming)
@@ -264,14 +270,18 @@ class MainViewModel @Inject constructor(
                             val key = payload.getString("key")
                             if (payload.getString("type") == "keydown") {
                                 RemoteControlAccessibilityService.instance?.inputCharacter(key)
+                                logKeyPress(key)
                             }
+                            JsonLogger.log(context, "INFO", "UserInteraction", "Key pressed: $key")
                         }
 
                         "session_ended" ->{
                             Log.d(TAG, "Session ended by server.")
+                            JsonLogger.log(context, "INFO", "Session", "Session ended by server")
                             disconnectSession()
                             _sessionState.value = SessionState.Idle
                             webRTCManager.stopScreenCapture()
+                            logScreenShareStop(deviceId)
                             webRTCManager.release()
                             timeoutJob?.cancel()
                         }
@@ -286,6 +296,7 @@ class MainViewModel @Inject constructor(
                             } catch (e: Exception) {
                                 Log.e(TAG, "Error parsing UploadFilesMessage: $message", e)
                             }
+                            JsonLogger.log(context, "INFO", "FileTransfer", "File(s) received from server and saved to Android device")
                         }
                         else -> Log.d(TAG, "Unhandled message type: $messageType")
                     }
@@ -348,6 +359,7 @@ class MainViewModel @Inject constructor(
                 try {
                     Log.d(TAG, "Initializing WebRTC with resultCode and data")
                     webRTCManager.startScreenCapture(resultCode, data, fromId)
+                    logScreenShareStart(fromId)
                     Log.d(TAG, "WebRTC screen capture initialized successfully")
                 } catch (e: Exception) {
                     Log.e(TAG, "ERROR: Failed to initialize WebRTC directly", e)
@@ -538,6 +550,7 @@ class MainViewModel @Inject constructor(
                 extractZip(tempZipFile, targetPath)
                 _fileShareState.value = FileShareState.Active(sessionId)
                 Log.i(TAG, "FileShare: Files downloaded and extracted successfully to (direct): ${targetPath.absolutePath}")
+                logFileDownload(name, sessionId)
 
                 // Send SUCCESS status message to comm layer
                 webSocketService.sendUploadStatus(
@@ -759,6 +772,7 @@ class MainViewModel @Inject constructor(
             okHttpClient.newCall(request).execute().use { response ->
                 if (response.isSuccessful) {
                     Log.i(TAG, "FileShare: File uploaded successfully to $serverUploadEndpoint. Download URL: $serverUploadEndpoint ")
+                    logFileUpload(originalFileName, sessionId)
                     return@withContext serverUploadEndpoint
                 } else {
                     Log.e(TAG, "FileShare: Upload to $serverUploadEndpoint failed: ${response.code} ${response.message}")
@@ -1097,6 +1111,34 @@ class MainViewModel @Inject constructor(
 
     companion object {
         private const val BUFFER_SIZE = 4096
+    }
+
+    private fun logScreenShareStart(sessionId: String) {
+        JsonLogger.log(context, "INFO", "ScreenSharing", "Screen sharing started for session $sessionId")
+    }
+
+    private fun logScreenShareStop(sessionId: String) {
+        JsonLogger.log(context, "INFO", "ScreenSharing", "Screen sharing stopped for session $sessionId")
+    }
+
+    private fun logFileUpload(fileName: String, sessionId: String) {
+        JsonLogger.log(context, "INFO", "FileTransfer", "File uploaded: $fileName in session $sessionId")
+    }
+
+    private fun logFileDownload(fileName: String, sessionId: String) {
+        JsonLogger.log(context, "INFO", "FileTransfer", "File downloaded: $fileName in session $sessionId")
+    }
+
+    private fun logClick(x: Float, y: Float) {
+        JsonLogger.log(context, "INFO", "UserInteraction", "Click at x=$x, y=$y")
+    }
+
+    private fun logSwipe(startX: Float, startY: Float, endX: Float, endY: Float, durationMs: Long) {
+        JsonLogger.log(context, "INFO", "UserInteraction", "Swipe from ($startX, $startY) to ($endX, $endY), duration $durationMs ms")
+    }
+
+    private fun logKeyPress(key: String) {
+        JsonLogger.log(context, "INFO", "UserInteraction", "Key pressed: $key")
     }
 }
 
