@@ -129,7 +129,11 @@ class MainViewModel @Inject constructor(
     }
 
     private fun connectAndObserveMessages() {
-        viewModelScope.launch {
+        if (messageObservationJob != null && messageObservationJob!!.isActive) {
+            Log.w(TAG, "Already observing messages, skipping duplicate observer.")
+            return
+        }
+        messageObservationJob = viewModelScope.launch {
             try {
                 webSocketService.connectWebSocket()
                 observeMessages()

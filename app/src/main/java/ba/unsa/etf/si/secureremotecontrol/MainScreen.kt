@@ -296,6 +296,9 @@ fun MainScreen(
             ) {
                 Text("Request Session")
             }
+            Spacer(modifier = Modifier.height(8.dp))
+
+
 
             Spacer(modifier = Modifier.height(8.dp))
 
@@ -305,6 +308,16 @@ fun MainScreen(
             ) {
                 Text("Deregister Device")
             }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Button(
+                onClick = onShowLogs,
+                enabled = true,
+            ) {
+                Text("View Session Logs")
+            }
+
         }
 
         Spacer(modifier = Modifier.height(16.dp))
