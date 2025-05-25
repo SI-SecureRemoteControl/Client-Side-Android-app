@@ -199,13 +199,13 @@ class MainViewModel @Inject constructor(
                 return@launch
             }
             try {
-                val response = apiService.removeSession(mapOf("token" to token, "deviceId" to deviceId))
-                if (response.code() == 200) {
+                //val response = apiService.removeSession(mapOf("token" to token, "deviceId" to deviceId))
+                //if (response.code() == 200) {
                     resetSessionState()
-                } else {
+                /*} else {
                     val errorMessage = response.body()?.get("message") as? String ?: "Failed to disconnect session"
                     _sessionState.value = SessionState.Error(errorMessage)
-                }
+                }*/
             } catch (e: Exception) {
                 _sessionState.value = SessionState.Error("Error: ${e.localizedMessage}")
             }
@@ -311,11 +311,12 @@ class MainViewModel @Inject constructor(
                             Log.d(TAG, "Session ended by server.")
                             JsonLogger.log(context, "INFO", "Session", "Session ended by server")
                             disconnectSession()
-                            _sessionState.value = SessionState.Idle
+                            requestStopScreenCapture()
+                           /* _sessionState.value = SessionState.Idle
                             webRTCManager.stopScreenCapture()
                             logScreenShareStop(deviceId)
                             webRTCManager.release()
-                            timeoutJob?.cancel()
+                            timeoutJob?.cancel()*/
                         }
                         "browse_request" -> {
                             Log.d(TAG, "Browse request received (also handled by dedicated observer).")
@@ -329,6 +330,13 @@ class MainViewModel @Inject constructor(
                                 Log.e(TAG, "Error parsing UploadFilesMessage: $message", e)
                             }
                             JsonLogger.log(context, "INFO", "FileTransfer", "File(s) received from server and saved to Android device")
+                        }
+
+                        "inactive_disconnect"->{
+                            Log.d(TAG, "Inactive disconnect message received.")
+                            JsonLogger.log(context, "INFO", "Session", "Inactive disconnect message received")
+                            disconnectSession()
+                            requestStopScreenCapture()
                         }
                         else -> Log.d(TAG, "Unhandled message type: $messageType")
                     }
@@ -420,6 +428,13 @@ class MainViewModel @Inject constructor(
     fun notifyScreenSharingStarted(fromId: String) {
         _sessionState.value = SessionState.Streaming
         Log.d(TAG, "Screen sharing started for device: $fromId")
+    }
+
+    private val _stopScreenCaptureEvent = MutableLiveData<Unit>()
+    val stopScreenCaptureEvent: LiveData<Unit> = _stopScreenCaptureEvent
+
+    fun requestStopScreenCapture() {
+        _stopScreenCaptureEvent.postValue(Unit)
     }
 
     fun startObservingRtcMessages(lifecycleOwner: LifecycleOwner) {

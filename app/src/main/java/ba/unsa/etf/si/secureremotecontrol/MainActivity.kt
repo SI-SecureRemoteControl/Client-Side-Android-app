@@ -119,6 +119,10 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        viewModel.stopScreenCaptureEvent.observe(this) {
+            stopScreenCapture()
+        }
+
         // Set up observer for file share events directly in onCreate
         viewModel.fileShareUiEvents.observeForever { event ->
             when (event) {
