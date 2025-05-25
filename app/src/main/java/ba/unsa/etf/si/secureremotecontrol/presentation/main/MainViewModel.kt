@@ -47,6 +47,7 @@ import java.util.zip.ZipOutputStream
 import javax.inject.Inject
 import ba.unsa.etf.si.secureremotecontrol.data.util.JsonLogger
 
+
 data class UploadFilesMessage(
     @SerializedName("type") val type: String = "upload_files",
     @SerializedName("deviceId") val fromDeviceId: String,
@@ -68,6 +69,9 @@ class MainViewModel @Inject constructor(
     private val webRTCManager: WebRTCManager,
     private val okHttpClient: OkHttpClient
 ) : ViewModel() {
+    private var lastClickTime = 0L
+    private var lastSwipeTime = 0L
+    private val debounceInterval = 400L
 
     private val TAG = "MainViewModel"
 
@@ -128,8 +132,9 @@ class MainViewModel @Inject constructor(
         }
     }
 
+    private var isObservingMessages = false
     private fun connectAndObserveMessages() {
-        if (messageObservationJob != null && messageObservationJob!!.isActive) {
+        if (messageObservationJob?.isActive == true) {
             Log.w(TAG, "Already observing messages, skipping duplicate observer.")
             return
         }
@@ -137,6 +142,7 @@ class MainViewModel @Inject constructor(
             try {
                 webSocketService.connectWebSocket()
                 observeMessages()
+                isObservingMessages = true
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to connect WebSocket: ${e.localizedMessage}")
                 _sessionState.value = SessionState.Error("Failed to connect WebSocket")
@@ -207,6 +213,11 @@ class MainViewModel @Inject constructor(
     }
 
     private fun observeMessages() {
+        if (messageObservationJob?.isActive == true) {
+            Log.w(TAG, "observeMessages already active, skipping duplicate registration.")
+            return
+        }
+
         messageObservationJob = viewModelScope.launch {
             webSocketService.observeMessages().collect { message ->
                 Log.d(TAG, "Raw message received: $message")
@@ -226,6 +237,15 @@ class MainViewModel @Inject constructor(
                             val screenHeight = displayMetrics.heightPixels + getNavigationBarHeight(accessibilityService)
                             val absoluteX = x * screenWidth
                             val absoluteY = y * screenHeight
+
+                            val now = System.currentTimeMillis()
+                            if (now - lastClickTime < debounceInterval) {
+                                Log.d(TAG, "Click ignored (debounce)")
+                                return@collect
+                            }
+                            lastClickTime = now
+
+
                             accessibilityService.performClick(absoluteX, absoluteY)
                             Log.d(TAG, "Click at ($absoluteX, $absoluteY)")
                             logClick(absoluteX, absoluteY)
@@ -246,10 +266,18 @@ class MainViewModel @Inject constructor(
                             val distance = Math.sqrt(Math.pow((endX - startX).toDouble(), 2.0) + Math.pow((endY - startY).toDouble(), 2.0)).toFloat()
                             val baseDuration = (distance / velocity).toLong()
                             val durationMs = Math.max(100, Math.min(baseDuration, 800))
+
+                            val now = System.currentTimeMillis()
+                            if (now - lastSwipeTime < debounceInterval) {
+                                Log.d(TAG, "Swipe ignored (debounce)")
+                                return@collect
+                            }
+                            lastSwipeTime = now
+
                             accessibilityService.performSwipe(startX, startY, endX, endY, durationMs)
-                            logSwipe(startX, startY, endX, endY, durationMs)
-                            Log.d(TAG, "Swipe from ($startX, $startY) to ($endX, $endY) duration $durationMs ms")
-                            JsonLogger.log(context, "INFO", "UserInteraction", "Swipe from ($startX, $startY) to ($endX, $endY), duration=${durationMs}ms")
+                           // logSwipe(startX, startY, endX, endY, durationMs)
+                          // Log.d(TAG, "Swipe from ($startX, $startY) to ($endX, $endY) duration $durationMs ms")
+                            JsonLogger.log(context, "INFO", "UserInteraction", "Swipe from ($startX, $startY) to ($endX, $endY), duration=${durationMs} ms")
                         }
                         "info" -> {
                             if( _sessionState.value != SessionState.Streaming)
@@ -408,6 +436,7 @@ class MainViewModel @Inject constructor(
     fun stopObservingMessages() {
         messageObservationJob?.cancel()
         messageObservationJob = null
+        isObservingMessages = false
     }
 
     // --- File Sharing Logic ---
@@ -1137,8 +1166,14 @@ class MainViewModel @Inject constructor(
         JsonLogger.log(context, "INFO", "UserInteraction", "Click at x=$x, y=$y")
     }
 
-    private fun logSwipe(startX: Float, startY: Float, endX: Float, endY: Float, durationMs: Long) {
-        JsonLogger.log(context, "INFO", "UserInteraction", "Swipe from ($startX, $startY) to ($endX, $endY), duration $durationMs ms")
+    private fun logSwipe(startX: Float, startY: Float, endX: Float, endY: Float, durationMs: Long,  swipeId: String? = null) {
+        val message = buildString {
+            append("Swipe from ($startX, $startY) to ($endX, $endY), duration $durationMs ms")
+            if (swipeId != null) {
+                append(", id=$swipeId")
+            }
+        }
+       // JsonLogger.log(context, "INFO", "UserInteraction", "Swipe from ($startX, $startY) to ($endX, $endY), duration $durationMs ms")
     }
 
     private fun logKeyPress(key: String) {
