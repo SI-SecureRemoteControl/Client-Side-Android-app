@@ -22,6 +22,9 @@ android {
             useSupportLibrary = true
         }
     }
+    buildFeatures {
+        viewBinding = true
+    }
 
     buildTypes {
         release {
@@ -117,6 +120,13 @@ dependencies {
 
     //DocumentFile
     implementation ("androidx.documentfile:documentfile:1.0.1")
+
+    //RecycleView
+    implementation("androidx.recyclerview:recyclerview:1.3.1")
+
+    implementation("androidx.appcompat:appcompat:1.6.1")
+
+    implementation("androidx.constraintlayout:constraintlayout:2.1.4")
 }
 
 apply(plugin = "com.google.gms.google-services")

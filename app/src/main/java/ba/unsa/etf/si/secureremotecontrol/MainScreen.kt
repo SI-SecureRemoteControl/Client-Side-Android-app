@@ -34,7 +34,8 @@ fun MainScreen(
     viewModel: MainViewModel,
     onDeregister: () -> Unit,
     onStartScreenCapture: (callback: (resultCode: Int, data: Intent) -> Unit) -> Unit,
-    onStopScreenCapture: () -> Unit
+    onStopScreenCapture: () -> Unit,
+    onShowLogs: () -> Unit
 ) {
     val sessionState by viewModel.sessionState.collectAsState()
     val context = LocalContext.current
@@ -244,6 +245,10 @@ fun MainScreen(
             }) {
                 Text("Disconnect")
             }
+            Button(onClick = onShowLogs) {
+                Text("View Session Logs")
+            }
+
             Spacer(modifier = Modifier.height(8.dp))
 
             // Button to request All Files Access if not granted
@@ -291,6 +296,9 @@ fun MainScreen(
             ) {
                 Text("Request Session")
             }
+            Spacer(modifier = Modifier.height(8.dp))
+
+
 
             Spacer(modifier = Modifier.height(8.dp))
 
@@ -300,6 +308,16 @@ fun MainScreen(
             ) {
                 Text("Deregister Device")
             }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Button(
+                onClick = onShowLogs,
+                enabled = true,
+            ) {
+                Text("View Session Logs")
+            }
+
         }
 
         Spacer(modifier = Modifier.height(16.dp))
