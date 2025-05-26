@@ -158,7 +158,10 @@ class ScreenSharingService : Service() {
         // the whole WebRTC functionality is done until the app restarts, then yes.
         // If the service might restart soon, maybe don't release the factory/EGL yet.
         // webRTCManager.release() // << Be cautious with this here
+        // Stop the MediaProjection if it was started
         super.onDestroy()
+
+
     }
 
     // createNotificationChannel() and createNotification() remain the same

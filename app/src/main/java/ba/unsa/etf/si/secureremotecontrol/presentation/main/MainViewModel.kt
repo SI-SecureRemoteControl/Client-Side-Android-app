@@ -199,13 +199,13 @@ class MainViewModel @Inject constructor(
                 return@launch
             }
             try {
-                val response = apiService.removeSession(mapOf("token" to token, "deviceId" to deviceId))
-                if (response.code() == 200) {
+                //val response = apiService.removeSession(mapOf("token" to token, "deviceId" to deviceId))
+                //if (response.code() == 200) {
                     resetSessionState()
-                } else {
+                /*} else {
                     val errorMessage = response.body()?.get("message") as? String ?: "Failed to disconnect session"
                     _sessionState.value = SessionState.Error(errorMessage)
-                }
+                }*/
             } catch (e: Exception) {
                 _sessionState.value = SessionState.Error("Error: ${e.localizedMessage}")
             }
@@ -239,10 +239,10 @@ class MainViewModel @Inject constructor(
                             val absoluteY = y * screenHeight
 
                             val now = System.currentTimeMillis()
-                            if (now - lastClickTime < debounceInterval) {
+                           /* if (now - lastClickTime < debounceInterval) {
                                 Log.d(TAG, "Click ignored (debounce)")
                                 return@collect
-                            }
+                            }*/
                             lastClickTime = now
 
 
@@ -268,10 +268,10 @@ class MainViewModel @Inject constructor(
                             val durationMs = Math.max(100, Math.min(baseDuration, 800))
 
                             val now = System.currentTimeMillis()
-                            if (now - lastSwipeTime < debounceInterval) {
+                           /* if (now - lastSwipeTime < debounceInterval) {
                                 Log.d(TAG, "Swipe ignored (debounce)")
                                 return@collect
-                            }
+                            }*/
                             lastSwipeTime = now
 
                             accessibilityService.performSwipe(startX, startY, endX, endY, durationMs)
@@ -311,11 +311,12 @@ class MainViewModel @Inject constructor(
                             Log.d(TAG, "Session ended by server.")
                             JsonLogger.log(context, "INFO", "Session", "Session ended by server")
                             disconnectSession()
-                            _sessionState.value = SessionState.Idle
+                            requestStopScreenCapture()
+                           /* _sessionState.value = SessionState.Idle
                             webRTCManager.stopScreenCapture()
                             logScreenShareStop(deviceId)
                             webRTCManager.release()
-                            timeoutJob?.cancel()
+                            timeoutJob?.cancel()*/
                         }
                         "browse_request" -> {
                             Log.d(TAG, "Browse request received (also handled by dedicated observer).")
@@ -329,6 +330,13 @@ class MainViewModel @Inject constructor(
                                 Log.e(TAG, "Error parsing UploadFilesMessage: $message", e)
                             }
                             JsonLogger.log(context, "INFO", "FileTransfer", "File(s) received from server and saved to Android device")
+                        }
+
+                        "inactive_disconnect"->{
+                            Log.d(TAG, "Inactive disconnect message received.")
+                            JsonLogger.log(context, "INFO", "Session", "Inactive disconnect message received")
+                            disconnectSession()
+                            requestStopScreenCapture()
                         }
                         else -> Log.d(TAG, "Unhandled message type: $messageType")
                     }
@@ -391,6 +399,7 @@ class MainViewModel @Inject constructor(
                 try {
                     Log.d(TAG, "Initializing WebRTC with resultCode and data")
                     webRTCManager.startScreenCapture(resultCode, data, fromId)
+
                     logScreenShareStart(fromId)
                     Log.d(TAG, "WebRTC screen capture initialized successfully")
                 } catch (e: Exception) {
@@ -403,6 +412,10 @@ class MainViewModel @Inject constructor(
                 Log.d(TAG, "Starting screen sharing service with intent")
                 context.startForegroundService(intent)
                 Log.d(TAG, "Screen sharing service started successfully")
+
+
+
+
 
                 // Update session state
                 if( _sessionState.value != SessionState.Streaming) {
@@ -420,6 +433,13 @@ class MainViewModel @Inject constructor(
     fun notifyScreenSharingStarted(fromId: String) {
         _sessionState.value = SessionState.Streaming
         Log.d(TAG, "Screen sharing started for device: $fromId")
+    }
+
+    private val _stopScreenCaptureEvent = MutableLiveData<Unit>()
+    val stopScreenCaptureEvent: LiveData<Unit> = _stopScreenCaptureEvent
+
+    fun requestStopScreenCapture() {
+        _stopScreenCaptureEvent.postValue(Unit)
     }
 
     fun startObservingRtcMessages(lifecycleOwner: LifecycleOwner) {
