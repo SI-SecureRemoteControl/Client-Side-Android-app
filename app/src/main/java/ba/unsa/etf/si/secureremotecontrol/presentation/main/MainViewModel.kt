@@ -239,10 +239,10 @@ class MainViewModel @Inject constructor(
                             val absoluteY = y * screenHeight
 
                             val now = System.currentTimeMillis()
-                            if (now - lastClickTime < debounceInterval) {
+                           /* if (now - lastClickTime < debounceInterval) {
                                 Log.d(TAG, "Click ignored (debounce)")
                                 return@collect
-                            }
+                            }*/
                             lastClickTime = now
 
 
@@ -268,10 +268,10 @@ class MainViewModel @Inject constructor(
                             val durationMs = Math.max(100, Math.min(baseDuration, 800))
 
                             val now = System.currentTimeMillis()
-                            if (now - lastSwipeTime < debounceInterval) {
+                           /* if (now - lastSwipeTime < debounceInterval) {
                                 Log.d(TAG, "Swipe ignored (debounce)")
                                 return@collect
-                            }
+                            }*/
                             lastSwipeTime = now
 
                             accessibilityService.performSwipe(startX, startY, endX, endY, durationMs)
@@ -399,6 +399,7 @@ class MainViewModel @Inject constructor(
                 try {
                     Log.d(TAG, "Initializing WebRTC with resultCode and data")
                     webRTCManager.startScreenCapture(resultCode, data, fromId)
+
                     logScreenShareStart(fromId)
                     Log.d(TAG, "WebRTC screen capture initialized successfully")
                 } catch (e: Exception) {
@@ -411,6 +412,10 @@ class MainViewModel @Inject constructor(
                 Log.d(TAG, "Starting screen sharing service with intent")
                 context.startForegroundService(intent)
                 Log.d(TAG, "Screen sharing service started successfully")
+
+
+
+
 
                 // Update session state
                 if( _sessionState.value != SessionState.Streaming) {
