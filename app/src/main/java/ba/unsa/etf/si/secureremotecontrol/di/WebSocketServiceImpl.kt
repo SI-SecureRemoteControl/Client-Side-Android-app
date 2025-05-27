@@ -1,4 +1,3 @@
-
 package ba.unsa.etf.si.secureremotecontrol.data.websocket
 
 import android.util.Log
@@ -18,12 +17,14 @@ import javax.inject.Inject
 import javax.inject.Singleton
 import ba.unsa.etf.si.secureremotecontrol.data.api.RtcMessage
 import ba.unsa.etf.si.secureremotecontrol.data.fileShare.*
+import ba.unsa.etf.si.secureremotecontrol.data.util.RegistrationPreferences // Import
 import com.google.gson.JsonObject
 
 @Singleton
 class WebSocketServiceImpl @Inject constructor(
     private val client: OkHttpClient,
-    private val gson: Gson
+    private val gson: Gson,
+    private val registrationPreferences: RegistrationPreferences // Inject RegistrationPreferences
 ) : WebSocketService {
 
     private val TAG = "WebSocketService"
@@ -52,19 +53,35 @@ class WebSocketServiceImpl @Inject constructor(
             return webSocket!!
         }
 
-        Log.d(TAG, "Creating new WebSocket connection")
-        val request = Request.Builder().url("wss://remote-control-gateway-production.up.railway.app/").build()
+        val currentWebSocketUrl = registrationPreferences.webSocketUrl
+        if (currentWebSocketUrl.isNullOrEmpty()) {
+            Log.e(TAG, "WebSocket URL is not configured in preferences. Cannot connect.")
+            // Return the existing webSocket instance (which might be null or closed)
+            // The connection will likely fail or not establish.
+            // This situation should ideally be prevented by UI flow ensuring URL is set.
+            // To satisfy the non-nullable return type if webSocket is null:
+            return webSocket ?: client.newWebSocket(
+                Request.Builder().url("wss://invalid-url-will-fail.com").build(), // Dummy request
+                object : WebSocketListener() {
+                    override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                        Log.e(TAG, "Dummy WebSocket failed due to missing URL configuration: ${t.message}")
+                    }
+                }
+            )
+        }
+
+        Log.d(TAG, "Creating new WebSocket connection to: $currentWebSocketUrl")
+        val request = Request.Builder().url(currentWebSocketUrl).build() // Use dynamic URL
 
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
-                Log.d(TAG, "WebSocket connection opened successfully")
+                Log.d(TAG, "WebSocket connection opened successfully to $currentWebSocketUrl")
                 isConnected = true
                 retryCount = 0
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
                 Log.d(TAG, "Message received: $text")
-                // Emit to the shared flow for all collectors
                 clientScope.launch {
                     messageChannel.emit(text)
                 }
@@ -86,18 +103,24 @@ class WebSocketServiceImpl @Inject constructor(
     }
 
     override fun observeMessages(): Flow<String> {
-        // Ensure we have a WebSocket connection
+        if (registrationPreferences.webSocketUrl.isNullOrEmpty()){
+            Log.w(TAG, "WebSocket URL not set. Message observation might not work until URL is configured and connection is established.")
+            // Potentially return an empty flow or a flow that emits an error.
+            // For now, it will attempt to connect if not connected, which will fail if URL is missing.
+        }
         if (!isConnected) {
             Log.d(TAG, "WebSocket not connected, connecting now")
-            connectWebSocket()
+            connectWebSocket() // This will now use the dynamic URL
         }
-
         Log.d(TAG, "Setting up message observation flow")
-        // Return the shared message channel
         return messageChannel.asSharedFlow()
     }
 
     override fun sendRawMessage(message: String) {
+        if (registrationPreferences.webSocketUrl.isNullOrEmpty()){
+            Log.e(TAG, "Cannot send raw message: WebSocket URL not configured.")
+            return
+        }
         if (!isConnected) {
             Log.d(TAG, "WebSocket not connected, connecting now before sending message")
             connectWebSocket()
@@ -162,6 +185,11 @@ class WebSocketServiceImpl @Inject constructor(
     }
 
     override fun sendSessionRequest(from: String, token: String) {
+        if (registrationPreferences.webSocketUrl.isNullOrEmpty()){
+            Log.e(TAG, "Cannot send session request: WebSocket URL not configured.")
+            _coroutineScope.launch { messageChannel.emit("{\"type\":\"error\", \"message\":\"WebSocket URL not configured.\"}")}
+            return
+        }
         if (!isConnected) {
             Log.e(TAG, "Cannot send session request: WebSocket is not connected.")
             connectWebSocket()
@@ -175,19 +203,19 @@ class WebSocketServiceImpl @Inject constructor(
         Log.d(TAG, "Session request sent from $from, success: $success")
     }
 
-    // FIXED: Only process known RTC message types and check for payload existence
+    private val _coroutineScope = CoroutineScope(Dispatchers.Main)
+
+
     override fun observeRtcMessages(): Flow<RtcMessage> = observeMessages()
         .mapNotNull { message ->
             try {
                 val jsonObject = JSONObject(message)
                 val type = jsonObject.optString("type", "")
 
-                // Only process RTC-specific message types
                 if (type == "offer" || type == "answer" || type == "ice-candidate") {
                     val fromId = jsonObject.optString("fromId", "")
                     val toId = jsonObject.optString("toId", "")
 
-                    // Check if payload exists before trying to access it
                     if (jsonObject.has("payload")) {
                         val payload = jsonObject.getJSONObject("payload")
                         RtcMessage(type, fromId, toId, payload)
@@ -196,11 +224,9 @@ class WebSocketServiceImpl @Inject constructor(
                         null
                     }
                 } else {
-                    // Not an RTC message, skip it silently
                     null
                 }
             } catch (e: Exception) {
-                // Only log as debug for non-RTC messages to avoid log spam
                 null
             }
         }
@@ -220,6 +246,10 @@ class WebSocketServiceImpl @Inject constructor(
     }
 
     private fun retryConnection() {
+        if (registrationPreferences.webSocketUrl.isNullOrEmpty()) {
+            Log.w(TAG, "Skipping retryConnection as WebSocket URL is not set.")
+            return
+        }
         if (retryCount < MAX_RETRY_ATTEMPTS) {
             retryCount++
             Log.d(TAG, "Retrying connection #$retryCount after ${RETRY_DELAY_MS}ms")
@@ -249,7 +279,6 @@ class WebSocketServiceImpl @Inject constructor(
             }
         }
 
-    // Sending messages from Android
     override fun sendRequestSessionFileshare(deviceId: String, sessionId: String) {
         val message = RequestSessionFileshareMessage(
             deviceId = deviceId,
@@ -293,16 +322,12 @@ class WebSocketServiceImpl @Inject constructor(
         Log.d(TAG, "Sent download_response: ${gson.toJson(message)}")
     }
 
-    // Observing messages for Android
-    // Generic helper to parse messages of a specific type
     private inline fun <reified T> observeSpecificMessage(messageType: String): Flow<T> = observeMessages()
         .mapNotNull { jsonString ->
             try {
-                // A quick check for type before full parsing
                 if (!jsonString.contains("\"type\":\"$messageType\"")) {
                     return@mapNotNull null
                 }
-
                 val jsonObject = JSONObject(jsonString)
                 if (jsonObject.optString("type", "") == messageType) {
                     gson.fromJson(jsonString, T::class.java)
