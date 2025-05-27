@@ -45,6 +45,8 @@ import java.io.IOException
 import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
 import javax.inject.Inject
+import ba.unsa.etf.si.secureremotecontrol.data.util.JsonLogger
+
 
 data class UploadFilesMessage(
     @SerializedName("type") val type: String = "upload_files",
@@ -67,6 +69,9 @@ class MainViewModel @Inject constructor(
     private val webRTCManager: WebRTCManager,
     private val okHttpClient: OkHttpClient
 ) : ViewModel() {
+    private var lastClickTime = 0L
+    private var lastSwipeTime = 0L
+    private val debounceInterval = 400L
 
     private val TAG = "MainViewModel"
 
@@ -127,11 +132,17 @@ class MainViewModel @Inject constructor(
         }
     }
 
+    private var isObservingMessages = false
     private fun connectAndObserveMessages() {
-        viewModelScope.launch {
+        if (messageObservationJob?.isActive == true) {
+            Log.w(TAG, "Already observing messages, skipping duplicate observer.")
+            return
+        }
+        messageObservationJob = viewModelScope.launch {
             try {
                 webSocketService.connectWebSocket()
                 observeMessages()
+                isObservingMessages = true
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to connect WebSocket: ${e.localizedMessage}")
                 _sessionState.value = SessionState.Error("Failed to connect WebSocket")
@@ -188,13 +199,13 @@ class MainViewModel @Inject constructor(
                 return@launch
             }
             try {
-                val response = apiService.removeSession(mapOf("token" to token, "deviceId" to deviceId))
-                if (response.code() == 200) {
+                //val response = apiService.removeSession(mapOf("token" to token, "deviceId" to deviceId))
+                //if (response.code() == 200) {
                     resetSessionState()
-                } else {
+                /*} else {
                     val errorMessage = response.body()?.get("message") as? String ?: "Failed to disconnect session"
                     _sessionState.value = SessionState.Error(errorMessage)
-                }
+                }*/
             } catch (e: Exception) {
                 _sessionState.value = SessionState.Error("Error: ${e.localizedMessage}")
             }
@@ -202,9 +213,15 @@ class MainViewModel @Inject constructor(
     }
 
     private fun observeMessages() {
+        if (messageObservationJob?.isActive == true) {
+            Log.w(TAG, "observeMessages already active, skipping duplicate registration.")
+            return
+        }
+
         messageObservationJob = viewModelScope.launch {
             webSocketService.observeMessages().collect { message ->
                 Log.d(TAG, "Raw message received: $message")
+
                 try {
                     val response = JSONObject(message)
                     val messageType = response.optString("type", "")
@@ -220,8 +237,19 @@ class MainViewModel @Inject constructor(
                             val screenHeight = displayMetrics.heightPixels + getNavigationBarHeight(accessibilityService)
                             val absoluteX = x * screenWidth
                             val absoluteY = y * screenHeight
+
+                            val now = System.currentTimeMillis()
+                           /* if (now - lastClickTime < debounceInterval) {
+                                Log.d(TAG, "Click ignored (debounce)")
+                                return@collect
+                            }*/
+                            lastClickTime = now
+
+
                             accessibilityService.performClick(absoluteX, absoluteY)
                             Log.d(TAG, "Click at ($absoluteX, $absoluteY)")
+                            logClick(absoluteX, absoluteY)
+                            JsonLogger.log(context, "INFO", "UserInteraction", "Click at x=$absoluteX, y=$absoluteY")
                         }
                         "swipe" -> {
                             val payload = response.optJSONObject("payload") ?: return@collect
@@ -238,8 +266,18 @@ class MainViewModel @Inject constructor(
                             val distance = Math.sqrt(Math.pow((endX - startX).toDouble(), 2.0) + Math.pow((endY - startY).toDouble(), 2.0)).toFloat()
                             val baseDuration = (distance / velocity).toLong()
                             val durationMs = Math.max(100, Math.min(baseDuration, 800))
+
+                            val now = System.currentTimeMillis()
+                           /* if (now - lastSwipeTime < debounceInterval) {
+                                Log.d(TAG, "Swipe ignored (debounce)")
+                                return@collect
+                            }*/
+                            lastSwipeTime = now
+
                             accessibilityService.performSwipe(startX, startY, endX, endY, durationMs)
-                            Log.d(TAG, "Swipe from ($startX, $startY) to ($endX, $endY) duration $durationMs ms")
+                           // logSwipe(startX, startY, endX, endY, durationMs)
+                          // Log.d(TAG, "Swipe from ($startX, $startY) to ($endX, $endY) duration $durationMs ms")
+                            JsonLogger.log(context, "INFO", "UserInteraction", "Swipe from ($startX, $startY) to ($endX, $endY), duration=${durationMs} ms")
                         }
                         "info" -> {
                             if( _sessionState.value != SessionState.Streaming)
@@ -264,16 +302,21 @@ class MainViewModel @Inject constructor(
                             val key = payload.getString("key")
                             if (payload.getString("type") == "keydown") {
                                 RemoteControlAccessibilityService.instance?.inputCharacter(key)
+                                logKeyPress(key)
                             }
+                            JsonLogger.log(context, "INFO", "UserInteraction", "Key pressed: $key")
                         }
 
                         "session_ended" ->{
                             Log.d(TAG, "Session ended by server.")
+                            JsonLogger.log(context, "INFO", "Session", "Session ended by server")
                             disconnectSession()
-                            _sessionState.value = SessionState.Idle
+                            requestStopScreenCapture()
+                           /* _sessionState.value = SessionState.Idle
                             webRTCManager.stopScreenCapture()
+                            logScreenShareStop(deviceId)
                             webRTCManager.release()
-                            timeoutJob?.cancel()
+                            timeoutJob?.cancel()*/
                         }
                         "browse_request" -> {
                             Log.d(TAG, "Browse request received (also handled by dedicated observer).")
@@ -286,6 +329,14 @@ class MainViewModel @Inject constructor(
                             } catch (e: Exception) {
                                 Log.e(TAG, "Error parsing UploadFilesMessage: $message", e)
                             }
+                            JsonLogger.log(context, "INFO", "FileTransfer", "File(s) received from server and saved to Android device")
+                        }
+
+                        "inactive_disconnect"->{
+                            Log.d(TAG, "Inactive disconnect message received.")
+                            JsonLogger.log(context, "INFO", "Session", "Inactive disconnect message received")
+                            disconnectSession()
+                            requestStopScreenCapture()
                         }
                         else -> Log.d(TAG, "Unhandled message type: $messageType")
                     }
@@ -348,6 +399,8 @@ class MainViewModel @Inject constructor(
                 try {
                     Log.d(TAG, "Initializing WebRTC with resultCode and data")
                     webRTCManager.startScreenCapture(resultCode, data, fromId)
+
+                    logScreenShareStart(fromId)
                     Log.d(TAG, "WebRTC screen capture initialized successfully")
                 } catch (e: Exception) {
                     Log.e(TAG, "ERROR: Failed to initialize WebRTC directly", e)
@@ -359,6 +412,10 @@ class MainViewModel @Inject constructor(
                 Log.d(TAG, "Starting screen sharing service with intent")
                 context.startForegroundService(intent)
                 Log.d(TAG, "Screen sharing service started successfully")
+
+
+
+
 
                 // Update session state
                 if( _sessionState.value != SessionState.Streaming) {
@@ -378,6 +435,13 @@ class MainViewModel @Inject constructor(
         Log.d(TAG, "Screen sharing started for device: $fromId")
     }
 
+    private val _stopScreenCaptureEvent = MutableLiveData<Unit>()
+    val stopScreenCaptureEvent: LiveData<Unit> = _stopScreenCaptureEvent
+
+    fun requestStopScreenCapture() {
+        _stopScreenCaptureEvent.postValue(Unit)
+    }
+
     fun startObservingRtcMessages(lifecycleOwner: LifecycleOwner) {
         viewModelScope.launch {
             webRTCManager.startObservingRtcMessages(lifecycleOwner)
@@ -392,6 +456,7 @@ class MainViewModel @Inject constructor(
     fun stopObservingMessages() {
         messageObservationJob?.cancel()
         messageObservationJob = null
+        isObservingMessages = false
     }
 
     // --- File Sharing Logic ---
@@ -538,6 +603,7 @@ class MainViewModel @Inject constructor(
                 extractZip(tempZipFile, targetPath)
                 _fileShareState.value = FileShareState.Active(sessionId)
                 Log.i(TAG, "FileShare: Files downloaded and extracted successfully to (direct): ${targetPath.absolutePath}")
+                logFileDownload(name, sessionId)
 
                 // Send SUCCESS status message to comm layer
                 webSocketService.sendUploadStatus(
@@ -759,6 +825,7 @@ class MainViewModel @Inject constructor(
             okHttpClient.newCall(request).execute().use { response ->
                 if (response.isSuccessful) {
                     Log.i(TAG, "FileShare: File uploaded successfully to $serverUploadEndpoint. Download URL: $serverUploadEndpoint ")
+                    logFileUpload(originalFileName, sessionId)
                     return@withContext serverUploadEndpoint
                 } else {
                     Log.e(TAG, "FileShare: Upload to $serverUploadEndpoint failed: ${response.code} ${response.message}")
@@ -1097,6 +1164,40 @@ class MainViewModel @Inject constructor(
 
     companion object {
         private const val BUFFER_SIZE = 4096
+    }
+
+    private fun logScreenShareStart(sessionId: String) {
+        JsonLogger.log(context, "INFO", "ScreenSharing", "Screen sharing started for session $sessionId")
+    }
+
+    private fun logScreenShareStop(sessionId: String) {
+        JsonLogger.log(context, "INFO", "ScreenSharing", "Screen sharing stopped for session $sessionId")
+    }
+
+    private fun logFileUpload(fileName: String, sessionId: String) {
+        JsonLogger.log(context, "INFO", "FileTransfer", "File uploaded: $fileName in session $sessionId")
+    }
+
+    private fun logFileDownload(fileName: String, sessionId: String) {
+        JsonLogger.log(context, "INFO", "FileTransfer", "File downloaded: $fileName in session $sessionId")
+    }
+
+    private fun logClick(x: Float, y: Float) {
+        JsonLogger.log(context, "INFO", "UserInteraction", "Click at x=$x, y=$y")
+    }
+
+    private fun logSwipe(startX: Float, startY: Float, endX: Float, endY: Float, durationMs: Long,  swipeId: String? = null) {
+        val message = buildString {
+            append("Swipe from ($startX, $startY) to ($endX, $endY), duration $durationMs ms")
+            if (swipeId != null) {
+                append(", id=$swipeId")
+            }
+        }
+       // JsonLogger.log(context, "INFO", "UserInteraction", "Swipe from ($startX, $startY) to ($endX, $endY), duration $durationMs ms")
+    }
+
+    private fun logKeyPress(key: String) {
+        JsonLogger.log(context, "INFO", "UserInteraction", "Key pressed: $key")
     }
 }
 
