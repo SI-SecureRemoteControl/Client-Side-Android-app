@@ -15,6 +15,7 @@ import javax.inject.Singleton
 import dagger.hilt.android.qualifiers.ApplicationContext
 import android.content.Context
 import ba.unsa.etf.si.secureremotecontrol.data.util.RegistrationPreferences
+
 @Module
 @InstallIn(SingletonComponent::class)
 object AppModule {
@@ -36,9 +37,14 @@ object AppModule {
 
     @Provides
     @Singleton
-    fun provideRetrofit(client: OkHttpClient, gson: Gson): Retrofit {
+    fun provideRetrofit(client: OkHttpClient, gson: Gson, registrationPreferences: RegistrationPreferences): Retrofit {
+        // The base URL for Retrofit might still be needed for HTTP API calls,
+        // or could also be made dynamic if necessary, but usually it's more static than WebSocket URLs.
+        // For now, keeping the original static Retrofit base URL.
+        // If you need the WebSocket URL for Retrofit as well, you'd need to adjust this.
+        // However, Retrofit typically does not handle WebSockets directly.
         return Retrofit.Builder()
-            .baseUrl("https://remote-control-gateway-production.up.railway.app/")
+            .baseUrl("https://remote-control-gateway-production.up.railway.app/") // This is for HTTP API, not WebSocket
             .client(client)
             .addConverterFactory(GsonConverterFactory.create(gson))
             .build()
@@ -54,10 +60,12 @@ object AppModule {
     @Singleton
     fun provideWebSocketService(
         client: OkHttpClient,
-        gson: Gson
+        gson: Gson,
+        registrationPreferences: RegistrationPreferences // Inject RegistrationPreferences
     ): WebSocketService {
-        return WebSocketServiceImpl(client, gson)
+        return WebSocketServiceImpl(client, gson, registrationPreferences) // Pass to constructor
     }
+
     @Provides
     @Singleton
     fun provideContext(@ApplicationContext context: Context): Context {

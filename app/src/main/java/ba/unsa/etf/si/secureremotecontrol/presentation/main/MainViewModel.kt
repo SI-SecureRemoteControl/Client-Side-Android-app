@@ -268,10 +268,7 @@ class MainViewModel @Inject constructor(
                             val durationMs = Math.max(100, Math.min(baseDuration, 800))
 
                             val now = System.currentTimeMillis()
-                           /* if (now - lastSwipeTime < debounceInterval) {
-                                Log.d(TAG, "Swipe ignored (debounce)")
-                                return@collect
-                            }*/
+                          
                             lastSwipeTime = now
 
                             accessibilityService.performSwipe(startX, startY, endX, endY, durationMs)
