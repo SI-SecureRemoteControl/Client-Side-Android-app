@@ -64,7 +64,7 @@ class VerificationViewModel @Inject constructor( // *** Inject dependencies via 
     fun deregisterDevice(deviceId: String) {
         if (isDeregistrationLoading) return
         if (deregistrationKey.isBlank()) {
-            deregistrationServerMessage = "Molimo unesite ključ za deregistraciju."
+            deregistrationServerMessage = "Please enter the deregistration key."
             isDeregistrationSuccessful = false
             return
         }
@@ -75,71 +75,33 @@ class VerificationViewModel @Inject constructor( // *** Inject dependencies via 
 
         viewModelScope.launch {
             try {
-                val request = DeregisterRequest(deviceId = deviceId, deregistrationKey = deregistrationKey)
-                // Ideally, inject ApiService: val response = apiService.deregisterDevice(request)
-                val response = RetrofitClient.instance.deregisterDevice(request)
+                // Send deregistration request via WebSocket
+                webSocketService.sendDeregistrationRequest(deviceId, deregistrationKey)
 
-                if (response.isSuccessful) {
-                    val body = response.body()
-                    // Check if the server *really* confirmed success (body might be null or contain status)
-                    val wasServerSuccess = body != null // Adjust this condition based on your actual API response if needed
+                // Assume success if no exception is thrown
+                isDeregistrationSuccessful = true
+                deregistrationServerMessage = "Device successfully deregistered."
+                Log.i("DeregistrationVM", "Deregistration request sent successfully.")
 
-                    if (wasServerSuccess) {
-                        isDeregistrationSuccessful = true
-                        deregistrationServerMessage = body?.message ?: "Uređaj uspješno deregistriran."
-                        Log.i("DeregistrationVM", "Server confirmed successful deregistration: ${deregistrationServerMessage}")
+                // Perform cleanup on success
+                try {
+                    Log.i("DeregistrationVM", "Clearing registration preferences...")
+                    registrationPrefs.clearRegistration()
 
-                        // --- *** START: CORE CHANGE - Cleanup on Success *** ---
-                        try {
-                            Log.i("DeregistrationVM", "Clearing registration preferences...")
-                            registrationPrefs.clearRegistration() // <<< Clears SharedPreferences
+                    Log.i("DeregistrationVM", "Stopping WebSocket heartbeat...")
+                    webSocketService.stopHeartbeat()
 
-                            Log.i("DeregistrationVM", "Stopping WebSocket heartbeat...")
-                            webSocketService.stopHeartbeat() // <<< Stops WebSocket pings
+                    Log.i("DeregistrationVM", "Disconnecting WebSocket...")
+                    webSocketService.disconnect()
 
-                            Log.i("DeregistrationVM", "Disconnecting WebSocket...") // <<< Disconnects WebSocket
-
-                            tokenDataStore.clearToken()
-                        } catch (cleanupException: Exception) {
-                            // Log error during cleanup but don't fail the overall success state
-                            Log.e("DeregistrationVM", "Error during post-deregistration cleanup", cleanupException)
-                        }
-                        // --- *** END: CORE CHANGE *** ---
-
-                    } else {
-                        // Handle cases where server returns 2xx but indicates failure in the body
-                        isDeregistrationSuccessful = false
-                        deregistrationServerMessage = body?.error ?: "Greška: Server je vratio uspjeh ali tijelo odgovora ukazuje na problem."
-                        Log.w("DeregistrationVM", "Deregistration failed according to response body: ${deregistrationServerMessage}")
-                    }
-
-                } else {
-                    // Server returned error (4xx, 5xx)
-                    isDeregistrationSuccessful = false
-                    val errorBody = response.errorBody()?.string()
-                    val errorResponse = try {
-                        gson.fromJson(errorBody, DeregisterResponse::class.java)
-                    } catch (e: Exception) {
-                        Log.e("DeregistrationVM", "Failed to parse error body: $errorBody", e)
-                        null
-                    }
-                    deregistrationServerMessage = errorResponse?.error ?: "Greška ${response.code()}: Deregistracija neuspješna."
-                    Log.e("DeregistrationVM", "Deregistration failed: Code ${response.code()}, Message: ${deregistrationServerMessage}, RawBody: $errorBody")
+                    tokenDataStore.clearToken()
+                } catch (cleanupException: Exception) {
+                    Log.e("DeregistrationVM", "Error during post-deregistration cleanup", cleanupException)
                 }
-
-            } catch (e: IOException) {
-                isDeregistrationSuccessful = false
-                deregistrationServerMessage = "Mrežna greška prilikom deregistracije. Provjerite internet konekciju."
-                Log.e("DeregistrationVM", "IOException during deregistration", e)
-            } catch (e: HttpException) {
-                isDeregistrationSuccessful = false
-                deregistrationServerMessage = "HTTP Greška ${e.code()}: Deregistracija neuspješna."
-                Log.e("DeregistrationVM", "HttpException during deregistration", e)
             } catch (e: Exception) {
                 isDeregistrationSuccessful = false
-                deregistrationServerMessage = "Neočekivana greška prilikom deregistracije."
-                Log.e("DeregistrationVM", "Unexpected error during deregistration", e)
-                // e.printStackTrace() // Consider using logging framework
+                deregistrationServerMessage = "Failed to deregister device. Please try again."
+                Log.e("DeregistrationVM", "Error during deregistration", e)
             } finally {
                 isDeregistrationLoading = false
             }

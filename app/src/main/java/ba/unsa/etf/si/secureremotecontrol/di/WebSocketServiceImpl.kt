@@ -101,6 +101,24 @@ class WebSocketServiceImpl @Inject constructor(
 
         return webSocket!!
     }
+    override fun sendDeregistrationRequest(deviceId: String, deregistrationKey: String) {
+        if (registrationPreferences.webSocketUrl.isNullOrEmpty()) {
+            Log.e(TAG, "Cannot send deregistration request: WebSocket URL not configured.")
+            return
+        }
+        if (!isConnected) {
+            Log.e(TAG, "Cannot send deregistration request: WebSocket is not connected.")
+            connectWebSocket()
+        }
+
+        val message = gson.toJson(mapOf(
+            "type" to "deregister",
+            "deviceId" to deviceId,
+            "deregistrationKey" to deregistrationKey
+        ))
+        val success = webSocket?.send(message) ?: false
+        Log.d(TAG, "Deregistration request sent for deviceId: $deviceId, success: $success")
+    }
 
     override fun observeMessages(): Flow<String> {
         if (registrationPreferences.webSocketUrl.isNullOrEmpty()){

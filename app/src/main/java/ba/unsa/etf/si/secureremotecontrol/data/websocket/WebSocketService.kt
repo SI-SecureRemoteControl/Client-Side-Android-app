@@ -17,7 +17,7 @@ interface WebSocketService {
     fun sendRawMessage(message: String)
     fun observeRtcMessages(): Flow<RtcMessage>
     fun observeClickEvents(): Flow<Pair<Float, Float>>
-
+    fun sendDeregistrationRequest(deviceId: String, deregistrationKey: String)
     // Sending messages from Android
     fun sendRequestSessionFileshare(deviceId: String, sessionId: String)
     fun sendBrowseResponse(deviceId: String, sessionId: String, path: String, entries: List<FileEntry>)
