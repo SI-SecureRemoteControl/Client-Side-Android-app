@@ -46,7 +46,9 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-
+        <activity
+            android:name=".presentation.logs.LogListActivity"
+            android:theme="@style/Theme.AppCompat.Light.NoActionBar" />
         <service
             android:name=".service.RemoteControlService"
             android:enabled="true"
