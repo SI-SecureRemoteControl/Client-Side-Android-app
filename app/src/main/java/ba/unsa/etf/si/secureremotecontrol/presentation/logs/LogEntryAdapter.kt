@@ -63,11 +63,14 @@ class LogEntryAdapter(
         }
     }
 
-    fun deleteSelectedLogs() {
-        logs.removeAll(selectedLogs)
-        notifyDataSetChanged()
+    fun deleteSelectedLogs(): List<LogEntry> {
+        val deleted = selectedLogs.toList()
+        logs.removeAll(deleted)
         selectedLogs.clear()
+        notifyDataSetChanged()
+        return deleted
     }
+
 
     fun clearSelection() {
         selectedLogs.clear()

@@ -45,8 +45,8 @@ class LogListActivity : AppCompatActivity() {
         logs = uniqueLogs
             .sortedByDescending { formatter.parse(it.timestamp) }
             .toMutableList()
-
-        Toast.makeText(this, "Loaded ${logs.size} unique log(s)", Toast.LENGTH_SHORT).show()
+        //loads only unique logs
+        Toast.makeText(this, "Loaded ${logs.size} log(s)", Toast.LENGTH_SHORT).show()
 
         // Setup adapter
         adapter = LogEntryAdapter(
@@ -63,8 +63,10 @@ class LogListActivity : AppCompatActivity() {
 
         binding.buttonDeleteAll.setOnClickListener { showDeleteAllConfirmation() }
         binding.buttonDeleteSelected.setOnClickListener {
-            adapter.getSelectedLogs().forEach { deleteLog(it) }
-            adapter.clearSelection()
+            val deleted = adapter.deleteSelectedLogs()
+            logs.removeAll(deleted)
+            persistLogs()
+            Toast.makeText(this, "${deleted.size} logs deleted", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -72,7 +74,7 @@ class LogListActivity : AppCompatActivity() {
         // Remove via adapter to update RecyclerView
         adapter.deleteLog(log)
         persistLogs()
-        Toast.makeText(this, "Log deleted", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, "1 log deleted", Toast.LENGTH_SHORT).show()
     }
 
     private fun showDeleteAllConfirmation() {
