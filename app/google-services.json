@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "716493311327",
+    "project_id": "remotecontrol-51742",
+    "storage_bucket": "remotecontrol-51742.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:716493311327:android:3a8e354ee606acca247aea",
+        "android_client_info": {
+          "package_name": "ba.unsa.etf.si.secureremotecontrol"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyC2sqCKgyhZwFdTviY0Ea2YfQBuBKyFQhA"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
