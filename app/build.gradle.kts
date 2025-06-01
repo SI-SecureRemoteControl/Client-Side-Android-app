@@ -58,6 +58,7 @@ android {
 }
 
 dependencies {
+    implementation(libs.androidx.recyclerview)
     val composeBomVersion = "2024.04.00" // Use the latest stable BOM version
     implementation(platform("androidx.compose:compose-bom:$composeBomVersion"))
 
@@ -127,6 +128,11 @@ dependencies {
     implementation("androidx.appcompat:appcompat:1.6.1")
 
     implementation("androidx.constraintlayout:constraintlayout:2.1.4")
+}
+configurations.all {
+    resolutionStrategy {
+        force ("androidx.recyclerview:recyclerview:1.3.1")
+    }
 }
 
 apply(plugin = "com.google.gms.google-services")

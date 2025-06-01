@@ -1,33 +1,54 @@
-<?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:orientation="vertical"
-    android:padding="12dp">
+    android:padding="12dp"
+    android:background="?android:attr/selectableItemBackground">
 
-    <TextView
-        android:id="@+id/textTimestamp"
+    <LinearLayout
+        android:id="@+id/textContainer"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="2025-05-24 23:00"
-        android:textStyle="bold" />
+        android:orientation="vertical"
+        android:layout_alignParentStart="true"
+        android:layout_toStartOf="@+id/buttonDeleteLog"
+        android:layout_centerVertical="true">
 
-    <TextView
-        android:id="@+id/textLevel"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="INFO"
-        android:textColor="#388E3C" />
+        <TextView
+            android:id="@+id/textTimestamp"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="2025-05-24 23:00"
+            android:textStyle="bold" />
 
-    <TextView
-        android:id="@+id/textTag"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="UserInteraction" />
+        <TextView
+            android:id="@+id/textLevel"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="INFO"
+            android:textColor="#388E3C" />
 
-    <TextView
-        android:id="@+id/textMessage"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="Click at x=120.0, y=340.0" />
-</LinearLayout>
+        <TextView
+            android:id="@+id/textTag"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="UserInteraction" />
+
+        <TextView
+            android:id="@+id/textMessage"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Click at x=120.0, y=340.0" />
+    </LinearLayout>
+
+    <ImageButton
+        android:id="@+id/buttonDeleteLog"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:layout_alignParentEnd="true"
+        android:layout_centerVertical="true"
+        android:src="@drawable/ic_delete"
+        android:contentDescription="@string/delete_log"
+        android:background="?attr/selectableItemBackgroundBorderless"
+        android:padding="4dp"
+        android:scaleType="fitCenter" />
+</RelativeLayout>
