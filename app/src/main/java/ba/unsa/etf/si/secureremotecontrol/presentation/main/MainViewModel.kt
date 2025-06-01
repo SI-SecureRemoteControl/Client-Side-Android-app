@@ -46,7 +46,7 @@ import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
 import javax.inject.Inject
 import ba.unsa.etf.si.secureremotecontrol.data.util.JsonLogger
-
+import ba.unsa.etf.si.secureremotecontrol.data.util.RegistrationPreferences
 
 data class UploadFilesMessage(
     @SerializedName("type") val type: String = "upload_files",
@@ -67,7 +67,8 @@ class MainViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
     private val tokenDataStore: TokenDataStore,
     private val webRTCManager: WebRTCManager,
-    private val okHttpClient: OkHttpClient
+    private val okHttpClient: OkHttpClient,
+    private val RegistrationPreferences: RegistrationPreferences
 ) : ViewModel() {
     private var lastClickTime = 0L
     private var lastSwipeTime = 0L
@@ -779,7 +780,19 @@ class MainViewModel @Inject constructor(
         }
     }
 
+    fun getUploadUrl(): String? {
+        val webSocketUrl = RegistrationPreferences.webSocketUrl ?: return null
 
+        // Parse and replace protocol
+        val uploadUrl = when {
+            webSocketUrl.startsWith("wss://") -> webSocketUrl.replaceFirst("wss://", "https://")
+            webSocketUrl.startsWith("ws://") -> webSocketUrl.replaceFirst("ws://", "http://")
+            else -> return null // Invalid or unsupported URL
+        }
+
+        // Append the endpoint
+        return "$uploadUrl/api/download"
+    }
 
 
 
@@ -795,7 +808,11 @@ class MainViewModel @Inject constructor(
             val fileExtension = file.extension.let { if (it.isEmpty()) "" else ".$it" }
             val generatedFileName = "android_file_${deviceId}_${System.currentTimeMillis()}$fileExtension"
 
-            val serverUploadEndpoint = "https://remote-control-gateway-production.up.railway.app/api/download"
+            val serverUploadEndpoint = getUploadUrl() ?: run {
+                Log.e(TAG, "FileShare: Upload URL is null. Cannot upload file.")
+                return@withContext null
+            }
+            Log.e(TAG, "FileShare: Upload URL is $serverUploadEndpoint")
             val originalFileName = file.name
             Log.i(TAG, "FileShare: Attempting to POST file to server endpoint: $serverUploadEndpoint with name: $generatedFileName, deviceId: $deviceId")
 
@@ -980,7 +997,11 @@ class MainViewModel @Inject constructor(
         try {
             // Generate a unique name for the ZIP file
             val zipName = "android_files_${deviceId}_${System.currentTimeMillis()}.zip"
-            val uploadUrl = "https://remote-control-gateway-production.up.railway.app/api/download"
+            val uploadUrl = getUploadUrl() ?: run {
+                Log.e(TAG, "FileShare: Upload URL is null. Cannot upload file.")
+                return@withContext null
+            }
+            Log.e(TAG, "FileShare: Upload URL is $uploadUrl")
 
             Log.i(TAG, "FileShare: Uploading ZIP to server: $uploadUrl")
 
