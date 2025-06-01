@@ -1,5 +1,6 @@
 package ba.unsa.etf.si.secureremotecontrol.data.util
 import android.content.Context
+import android.util.Log
 import ba.unsa.etf.si.secureremotecontrol.data.models.LogEntry
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
@@ -8,7 +9,7 @@ import java.text.SimpleDateFormat
 import java.util.*
 
 object JsonLogger {
-    private const val FILE_NAME = "log.json"
+    internal const val FILE_NAME = "log.json"
     private val gson = Gson()
 
     fun log(

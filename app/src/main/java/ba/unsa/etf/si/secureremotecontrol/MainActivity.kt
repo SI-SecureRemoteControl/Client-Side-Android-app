@@ -18,13 +18,21 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
 
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.runtime.Composable // Placeholder for RegisterScreen
+//import androidx.activity.viewModels
+
+
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import ba.unsa.etf.si.secureremotecontrol.data.datastore.TokenDataStore
 import ba.unsa.etf.si.secureremotecontrol.data.util.JsonLogger
+
+import ba.unsa.etf.si.secureremotecontrol.presentation.logs.LogListActivity
+
 import ba.unsa.etf.si.secureremotecontrol.data.util.RegistrationPreferences
+
 import ba.unsa.etf.si.secureremotecontrol.presentation.main.FileShareUiEvent
 
 import ba.unsa.etf.si.secureremotecontrol.presentation.main.MainViewModel
@@ -169,7 +177,10 @@ class MainActivity : ComponentActivity() {
                     }
 
                     composable("main") {
-                        MainScreen( // Assuming this composable exists
+
+                        val context = LocalContext.current
+                        MainScreen(
+
                             viewModel = viewModel,
                             onDeregister = {
                                 navController.navigate("deregister")
@@ -181,7 +192,8 @@ class MainActivity : ComponentActivity() {
                                 stopScreenCapture()
                             },
                             onShowLogs = {
-                                navController.navigate("sessionLog")
+                                val intent = Intent(context, LogListActivity::class.java)
+                                context.startActivity(intent)
                             }
                         )
                     }
