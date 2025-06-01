@@ -1,5 +1,5 @@
-
 package ba.unsa.etf.si.secureremotecontrol
+
 import ba.unsa.etf.si.secureremotecontrol.presentation.session.SessionViewModel
 import androidx.activity.viewModels
 import NotificationPermissionHandler
@@ -17,17 +17,27 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
+
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.runtime.Composable // Placeholder for RegisterScreen
 //import androidx.activity.viewModels
+
+
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import ba.unsa.etf.si.secureremotecontrol.data.datastore.TokenDataStore
 import ba.unsa.etf.si.secureremotecontrol.data.util.JsonLogger
+
 import ba.unsa.etf.si.secureremotecontrol.presentation.logs.LogListActivity
+
+import ba.unsa.etf.si.secureremotecontrol.data.util.RegistrationPreferences
+
 import ba.unsa.etf.si.secureremotecontrol.presentation.main.FileShareUiEvent
+
 import ba.unsa.etf.si.secureremotecontrol.presentation.main.MainViewModel
 import ba.unsa.etf.si.secureremotecontrol.presentation.session.SessionLogScreen
+import ba.unsa.etf.si.secureremotecontrol.presentation.urlsetup.UrlSetupScreen // Import new screen
 import ba.unsa.etf.si.secureremotecontrol.presentation.verification.DeregistrationScreen
 import ba.unsa.etf.si.secureremotecontrol.service.RemoteControlClickService
 import ba.unsa.etf.si.secureremotecontrol.service.ScreenSharingService
@@ -37,10 +47,15 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import javax.inject.Inject
 
+
+
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
     @Inject
     lateinit var tokenDataStore: TokenDataStore
+
+    @Inject // Inject RegistrationPreferences
+    lateinit var registrationPreferences: RegistrationPreferences
 
     private val viewModel: MainViewModel by viewModels()
     private val sessionViewModel: SessionViewModel by viewModels()
@@ -57,31 +72,21 @@ class MainActivity : ComponentActivity() {
         val notificationPermissionHandler = NotificationPermissionHandler(this)
         notificationPermissionHandler.checkAndRequestNotificationPermission()
 
-        // Initialize screen capture launcher
         screenCaptureLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
             val resultCode = result.resultCode
             val data = result.data
 
             Log.d("MainActivity", "Screen capture resultCode: $resultCode, data: $data")
             if (resultCode == Activity.RESULT_OK && data != null) {
-                // Get device ID for tracking
                 val fromId = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID)
                 Log.d("MainActivity", "Screen capture granted for device $fromId")
                 JsonLogger.logScreenShareStart(this)
                 JsonLogger.log(this, "INFO", "ScreenCapture", "User granted screen sharing permission")
 
-                // FIRST: Pass result to the callback - this is critical for ViewModel's proper initialization
-                // The callback ultimately calls viewModel.startStreaming which sets up WebRTC
                 onScreenCaptureResult?.invoke(resultCode, data)
-
-                // THEN: Add additional log to confirm callback was invoked
                 Log.d("MainActivity", "Screen capture callback was ${if (onScreenCaptureResult == null) "NULL" else "invoked"}")
                 onScreenCaptureResult = null
 
-                // DO NOT start ScreenSharingService here - let viewModel.startStreaming handle it
-                // This prevents duplicated service starts and ensures proper sequencing
-
-                // Start the click service separately - this is fine
                 val clickIntent = Intent(this, RemoteControlClickService::class.java)
                 startService(clickIntent)
                 ba.unsa.etf.si.secureremotecontrol.data.util.JsonLogger.log(
@@ -90,10 +95,6 @@ class MainActivity : ComponentActivity() {
                     "MainActivity",
                     "Started RemoteControlClickService"
                 )
-                val logs = ba.unsa.etf.si.secureremotecontrol.data.util.JsonLogger.readLogs(this)
-                logs.forEach {
-                    Log.d("LogEntry", "${it.timestamp} [${it.level}] ${it.tag}: ${it.message}")
-                }
                 Log.d("MainActivity", "Started RemoteControlClickService")
             } else {
                 Log.e("MainActivity", "Screen capture permission denied or invalid data.")
@@ -102,14 +103,11 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        // Initialize all files access launcher
         allFilesAccessLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { _ ->
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 if (Environment.isExternalStorageManager()) {
                     Toast.makeText(this, "All Files Access granted. Starting screen capture.", Toast.LENGTH_SHORT).show()
                     JsonLogger.log(this, "INFO", "Permissions", "All Files Access granted in launcher callback, starting screen capture")
-
-                    // Now that we have file permission, start screen capture
                     startScreenCapture { resultCode, data ->
                         val fromId = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID)
                         viewModel.startStreaming(resultCode, data, fromId)
@@ -125,18 +123,15 @@ class MainActivity : ComponentActivity() {
             stopScreenCapture()
         }
 
-        // Set up observer for file share events directly in onCreate
         viewModel.fileShareUiEvents.observeForever { event ->
             when (event) {
                 is FileShareUiEvent.RequestDirectoryPicker -> {
-                    // Instead of launching picker, launch all files access permission
                     requestAllFilesAccess()
                 }
                 is FileShareUiEvent.DirectorySelected -> {
-                    // We won't use this event since we're not using the picker anymore
+                    // Not used as much now
                 }
                 is FileShareUiEvent.PermissionOrDirectoryNeeded -> {
-                    // This will request all files access
                     requestAllFilesAccess()
                 }
             }
@@ -146,15 +141,33 @@ class MainActivity : ComponentActivity() {
             SecureRemoteControlTheme {
                 val navController = rememberNavController()
 
-                // Start observing RTC messages
-                viewModel.startObservingRtcMessages(this)
+                // Start observing RTC messages - but only if WebSocket URL is set.
+                // The ViewModel's connectAndObserveMessages will use the URL from preferences.
+                // If the URL isn't set, WebSocketServiceImpl will log an error and not connect.
+                // We ensure the app flow forces URL setup first.
+                if (!registrationPreferences.webSocketUrl.isNullOrEmpty()) {
+                    viewModel.startObservingRtcMessages(this)
+                }
+
 
                 NavHost(
                     navController = navController,
                     startDestination = determineStartDestination()
                 ) {
+                    composable("urlSetup") { // New route for URL setup
+                        UrlSetupScreen(
+                            onUrlSet = { nextRoute ->
+                                // After URL is set, RTC messages can be observed.
+                                viewModel.startObservingRtcMessages(this@MainActivity)
+                                navController.navigate(nextRoute) {
+                                    popUpTo("urlSetup") { inclusive = true }
+                                }
+                            }
+                        )
+                    }
+
                     composable("registration") {
-                        RegisterScreen(
+                        RegisterScreen( // Assuming this composable exists
                             onRegistrationSuccess = {
                                 navController.navigate("main") {
                                     popUpTo("registration") { inclusive = true }
@@ -164,8 +177,10 @@ class MainActivity : ComponentActivity() {
                     }
 
                     composable("main") {
+
                         val context = LocalContext.current
                         MainScreen(
+
                             viewModel = viewModel,
                             onDeregister = {
                                 navController.navigate("deregister")
@@ -188,7 +203,8 @@ class MainActivity : ComponentActivity() {
                             navController = navController,
                             onDeregisterSuccess = {
                                 navController.navigate("registration") {
-                                    popUpTo("deregister") { inclusive = true }
+                                    popUpTo("main") { inclusive = true } // Corrected popUpTo logic
+                                    popUpTo("deregister") {inclusive = true}
                                 }
                             }
                         )
@@ -197,7 +213,6 @@ class MainActivity : ComponentActivity() {
                     composable("sessionLog") {
                         SessionLogScreen()
                     }
-
                 }
             }
         }
@@ -205,8 +220,13 @@ class MainActivity : ComponentActivity() {
 
     private fun determineStartDestination(): String {
         return runBlocking {
-            val token = tokenDataStore.token.first()
-            if (token.isNullOrEmpty()) "registration" else "main"
+            val wsUrl = registrationPreferences.webSocketUrl
+            if (wsUrl.isNullOrEmpty()) {
+                "urlSetup" // Navigate to URL setup first if not set
+            } else {
+                val token = tokenDataStore.token.first()
+                if (token.isNullOrEmpty()) "registration" else "main"
+            }
         }
     }
 
@@ -220,7 +240,6 @@ class MainActivity : ComponentActivity() {
             } catch (e: Exception) {
                 Log.e("MainActivity", "Could not launch All Files Access permission screen", e)
                 JsonLogger.log(this, "ERROR", "Permissions", "Failed to launch app-specific All Files Access permission screen. Falling back to general.")
-                // Fallback to general settings
                 val intent = Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
                 allFilesAccessLauncher.launch(intent)
                 JsonLogger.log(this, "INFO", "Permissions", "Launched general All Files Access permission intent")
@@ -238,11 +257,8 @@ class MainActivity : ComponentActivity() {
     private fun startScreenCapture(callback: (resultCode: Int, data: Intent) -> Unit) {
         val mediaProjectionManager = getSystemService(MediaProjectionManager::class.java) as MediaProjectionManager
         val captureIntent = mediaProjectionManager.createScreenCaptureIntent()
-
-        // CRITICAL: Store the callback BEFORE launching the screen capture intent
         Log.d("MainActivity", "Setting onScreenCaptureResult callback and launching screen capture")
         onScreenCaptureResult = callback
-
         screenCaptureLauncher.launch(captureIntent)
     }
 
@@ -256,7 +272,6 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        // Make sure to remove the observer to prevent memory leaks
         viewModel.fileShareUiEvents.removeObserver { /* observer */ }
         JsonLogger.log(this, "INFO", "MainActivity", "App destroyed and observer removed")
     }
