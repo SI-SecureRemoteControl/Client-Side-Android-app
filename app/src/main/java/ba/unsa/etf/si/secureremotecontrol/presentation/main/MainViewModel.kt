@@ -336,6 +336,14 @@ class MainViewModel @Inject constructor(
                             disconnectSession()
                             requestStopScreenCapture()
                         }
+
+                        "session_expired" -> {
+                            Log.d(TAG, "Session expired message received.")
+                            JsonLogger.log(context, "INFO", "Session", "Session expired message received")
+                            disconnectSession()
+                            requestStopScreenCapture()
+                        }
+
                         else -> Log.d(TAG, "Unhandled message type: $messageType")
                     }
                 } catch (e: JSONException) {
