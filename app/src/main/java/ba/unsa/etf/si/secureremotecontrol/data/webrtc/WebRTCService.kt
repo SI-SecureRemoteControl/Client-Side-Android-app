@@ -44,18 +44,14 @@ class WebRTCService @Inject constructor(
     // Store current peer ID
     private var currentPeerId: String? = null
 
-    private val iceServers = listOf(
-        PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer(),
-        // Add TURN servers if available
-        // PeerConnection.IceServer.builder("turn:your-turn-server.example:3478")
-        //     .setUsername("username")
-        //     .setPassword("password")
-        //     .createIceServer(),
-        // PeerConnection.IceServer.builder("turn:your-turn-server.example:3478?transport=tcp")
-        //     .setUsername("username")
-        //     .setPassword("password")
-        //     .createIceServer()
+
+
+
+        private val iceServers = listOf(
+            PeerConnection.IceServer.builder("stun:stun.l.google.com:19302")
+                .createIceServer()
     )
+
 
     private val peerConnectionConstraints = MediaConstraints().apply {
         mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", "true"))

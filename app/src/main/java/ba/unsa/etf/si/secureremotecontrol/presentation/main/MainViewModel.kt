@@ -200,13 +200,16 @@ class MainViewModel @Inject constructor(
                 return@launch
             }
             try {
-                //val response = apiService.removeSession(mapOf("token" to token, "deviceId" to deviceId))
-                //if (response.code() == 200) {
-                    resetSessionState()
-                /*} else {
-                    val errorMessage = response.body()?.get("message") as? String ?: "Failed to disconnect session"
-                    _sessionState.value = SessionState.Error(errorMessage)
-                }*/
+                // Send terminate_session message via WebSocket
+                val terminateMessage = JSONObject().apply {
+                    put("type", "terminate_session")
+                    put("deviceId", deviceId)
+                    put("token", token)
+                }
+                webSocketService.sendRawMessage(terminateMessage.toString())
+
+
+                resetSessionState()
             } catch (e: Exception) {
                 _sessionState.value = SessionState.Error("Error: ${e.localizedMessage}")
             }
