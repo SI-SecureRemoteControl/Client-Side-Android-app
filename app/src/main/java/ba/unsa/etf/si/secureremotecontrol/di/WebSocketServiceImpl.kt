@@ -145,7 +145,8 @@ class WebSocketServiceImpl @Inject constructor(
         }
 
         val success = webSocket?.send(message) ?: false
-        Log.d(TAG, "Sent raw message, success: $success")
+        Log.d(TAG, "Sent raw message: $message, success: $success")
+
     }
 
     override fun sendRegistration(device: Device) {
